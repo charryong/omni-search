@@ -1221,6 +1221,72 @@ body {
   color: #baf5df;
 }
 
+.row-action.danger-row-action {
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--border-soft));
+  color: color-mix(in srgb, var(--danger) 86%, var(--text-main));
+  background: color-mix(in srgb, var(--surface-strong) 80%, rgba(180, 70, 70, 0.1));
+  padding: 4px 8px;
+}
+
+.row-action.danger-row-action:hover {
+  border-color: color-mix(in srgb, var(--danger) 78%, var(--border-soft));
+  color: var(--danger);
+}
+
+.row-action.danger-row-action svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: currentColor;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, #05070f 60%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 16px;
+}
+
+.modal-card {
+  width: min(420px, 90vw);
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-soft) 70%, transparent);
+  background: color-mix(in srgb, var(--surface-strong) 82%, transparent);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  padding: 16px 18px;
+  color: var(--text-main);
+}
+
+.modal-card h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.modal-card p {
+  margin: 4px 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.modal-path {
+  word-break: break-all;
+}
+
+.modal-meta {
+  color: var(--text-soft-contrast);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .hint,
 .error-row {
   margin: 8px 12px;
@@ -1331,6 +1397,32 @@ body {
   margin-top: 4px;
   color: var(--text-muted);
   font-size: 0.82rem;
+}
+
+.about-version {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-soft) 70%, transparent);
+  background: color-mix(in srgb, var(--surface-input) 72%, transparent);
+  color: var(--text-main);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.about-version-label {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.about-version-value {
+  font-variant-numeric: tabular-nums;
 }
 
 .about-developer {
