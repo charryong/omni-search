@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import "./App.css";
 
 const POLL_INTERVAL_MS = 700;
@@ -50,6 +51,13 @@ type DuplicateScanStatus = {
   totalFiles: number;
   groupsFound: number;
   progressPercent: number;
+};
+
+type DuplicateDeleteCandidate = {
+  groupId: string;
+  path: string;
+  name: string;
+  size: number;
 };
 
 type DriveInfo = {
@@ -484,6 +492,9 @@ function App() {
     groupsFound: 0,
     progressPercent: 0,
   });
+  const [duplicateDeleteCandidate, setDuplicateDeleteCandidate] =
+    useState<DuplicateDeleteCandidate | null>(null);
+  const [duplicateDeleteBusy, setDuplicateDeleteBusy] = useState(false);
   const [resultView, setResultView] = useState<ResultViewTab>("all");
   const [resultSort, setResultSort] = useState<ResultSortMode>("relevance");
   const [showPreviews, setShowPreviews] = useState<boolean>(() => {
@@ -531,6 +542,7 @@ function App() {
   const [previewSourceState, setPreviewSourceState] = useState<Record<string, number>>({});
   const [previewReadyState, setPreviewReadyState] = useState<Record<string, true>>({});
   const [previewDataUrls, setPreviewDataUrls] = useState<Record<string, string>>({});
+  const [appVersion, setAppVersion] = useState<string>("");
   const previousIndexedCountRef = useRef<number | null>(null);
   const indexSyncTimeoutRef = useRef<number | null>(null);
 
@@ -627,6 +639,35 @@ function App() {
     document.documentElement.setAttribute("data-theme", themeMode);
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    let active = true;
+    getVersion()
+      .then((version) => {
+        if (active) {
+          setAppVersion(version);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAppVersion("unknown");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const suppressContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
+    window.addEventListener("contextmenu", suppressContextMenu, true);
+    return () => {
+      window.removeEventListener("contextmenu", suppressContextMenu, true);
+    };
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(PREVIEW_STORAGE_KEY, showPreviews ? "1" : "0");
@@ -1080,6 +1121,57 @@ function App() {
       }
     } catch (error) {
       setDuplicatesError(`Failed to cancel duplicate scan: ${String(error)}`);
+    }
+  }
+
+  function removeDuplicateFromState(groupId: string, path: string): void {
+    setDuplicateGroups((previous) =>
+      previous
+        .map((group) => {
+          if (group.groupId !== groupId) {
+            return group;
+          }
+          const nextFiles = group.files.filter(
+            (file) => stripInvisibleText(file.path).trim() !== path,
+          );
+          if (nextFiles.length === group.files.length) {
+            return group;
+          }
+          const nextFileCount = Math.max(0, group.fileCount - 1);
+          const nextTotalBytes =
+            group.totalBytes >= group.size ? group.totalBytes - group.size : group.totalBytes;
+          return {
+            ...group,
+            fileCount: nextFileCount,
+            totalBytes: nextTotalBytes,
+            files: nextFiles,
+          };
+        })
+        .filter((group) => group.fileCount >= 2),
+    );
+  }
+
+  async function confirmDuplicateDelete(): Promise<void> {
+    if (!duplicateDeleteCandidate || duplicateDeleteBusy) {
+      return;
+    }
+    setDuplicateDeleteBusy(true);
+    try {
+      const deleted = await invoke<boolean>("delete_path", {
+        path: duplicateDeleteCandidate.path,
+      });
+      if (deleted) {
+        removeDuplicateFromState(
+          duplicateDeleteCandidate.groupId,
+          duplicateDeleteCandidate.path,
+        );
+        setDuplicateDeleteCandidate(null);
+        setDuplicatesError(null);
+      }
+    } catch (error) {
+      setDuplicatesError(`Failed to delete item: ${String(error)}`);
+    } finally {
+      setDuplicateDeleteBusy(false);
     }
   }
 
@@ -1837,6 +1929,29 @@ function App() {
                             >
                               Folder
                             </button>
+                            <button
+                              type="button"
+                              className="row-action danger-row-action"
+                              disabled={!hasPath}
+                              title="Delete"
+                              aria-label="Delete duplicate"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                if (!hasPath) {
+                                  return;
+                                }
+                                setDuplicateDeleteCandidate({
+                                  groupId: group.groupId,
+                                  path: cleanedPath.trim(),
+                                  name: fileName,
+                                  size: file.size,
+                                });
+                              }}
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8z" />
+                              </svg>
+                            </button>
                           </div>
                         </li>,
                       );
@@ -1853,6 +1968,57 @@ function App() {
                 })}
               </ul>
             </section>
+
+            {duplicateDeleteCandidate ? (
+              <div
+                className="modal-overlay"
+                role="dialog"
+                aria-modal="true"
+                onClick={() => {
+                  if (!duplicateDeleteBusy) {
+                    setDuplicateDeleteCandidate(null);
+                  }
+                }}
+              >
+                <div
+                  className="modal-card"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <h3>Delete duplicate?</h3>
+                  <p>
+                    {duplicateDeleteCandidate.name || "Selected file"}
+                  </p>
+                  <p className="modal-path">{duplicateDeleteCandidate.path}</p>
+                  <p className="modal-meta">
+                    {formatBytes(duplicateDeleteCandidate.size)}
+                  </p>
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      disabled={duplicateDeleteBusy}
+                      onClick={() => {
+                        setDuplicateDeleteCandidate(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="row-action danger-row-action"
+                      disabled={duplicateDeleteBusy}
+                      onClick={() => {
+                        void confirmDuplicateDelete();
+                      }}
+                    >
+                      {duplicateDeleteBusy ? "Deleting..." : "Delete"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </section>
         ) : null}
 
@@ -1917,6 +2083,12 @@ function App() {
                   <p className="about-tagline">
                     Fast local search across your drives with rich filters.
                   </p>
+                  <div className="about-version">
+                    <span className="about-version-label">Version</span>
+                    <span className="about-version-value">
+                      {appVersion ? `v${appVersion}` : "Loading..."}
+                    </span>
+                  </div>
                 </div>
                 <div className="about-developer">
                   <span className="about-label">Built by</span>
