@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import "./App.css";
 
 const POLL_INTERVAL_MS = 700;
 const SEARCH_DEBOUNCE_MS = 130;
+const FILTER_SEARCH_DEBOUNCE_MS = 320;
 const SEARCH_LIMIT = 200;
 const SEARCH_LIMIT_MIN = SEARCH_LIMIT;
 const SEARCH_LIMIT_MAX = 5000;
 const PREVIEW_PREFETCH_LIMIT = 40;
+const DUPLICATE_CANCEL_MESSAGE = "Duplicate scan cancelled.";
+const DUPLICATE_NOTICE_TIMEOUT_MS = 2400;
 
 type IndexStatus = {
   indexing: boolean;
@@ -82,13 +85,489 @@ type ResultViewTab = "all" | "apps" | "media" | "docs" | "archives";
 type ResultSortMode = "relevance" | "newest" | "largest" | "name";
 type ThemeMode = "dark" | "light";
 type PreviewKind = "image" | "video" | "pdf" | "none";
+const THEME_PRESET_IDS = ["slate", "nordic", "aurora", "ember", "cedar", "solar"] as const;
+type ThemePresetId = (typeof THEME_PRESET_IDS)[number];
+type ThemeVariableSet = Record<string, string>;
+type ThemePreviewSwatch = {
+  bg: string;
+  panel: string;
+  panelAlt: string;
+  accent: string;
+  text: string;
+  muted: string;
+  glow: string;
+};
+type ThemePreset = {
+  id: ThemePresetId;
+  label: string;
+  description: string;
+  dark: ThemeVariableSet;
+  light: ThemeVariableSet;
+  preview: {
+    dark: ThemePreviewSwatch;
+    light: ThemePreviewSwatch;
+  };
+};
 
 const DEVELOPER_NAME = "Eyuel Engida";
 const THEME_STORAGE_KEY = "omnisearch_theme_mode";
+const THEME_PRESET_STORAGE_KEY = "omnisearch_theme_preset";
 const PREVIEW_STORAGE_KEY = "omnisearch_show_previews";
 const INCLUDE_FOLDERS_STORAGE_KEY = "omnisearch_include_folders";
 const INCLUDE_ALL_DRIVES_STORAGE_KEY = "omnisearch_include_all_drives";
 const SEARCH_LIMIT_STORAGE_KEY = "omnisearch_search_limit";
+const THEME_PRESETS: ThemePreset[] = [
+  {
+    id: "aurora",
+    label: "Aurora",
+    description: "The blue-green OmniSearch look.",
+    dark: {
+      "--bg-deep": "#07090f",
+      "--bg-mid": "#0d1322",
+      "--panel": "rgba(13, 18, 33, 0.82)",
+      "--panel-border": "rgba(124, 141, 182, 0.28)",
+      "--text-main": "#edf2ff",
+      "--text-muted": "#9ea8c4",
+      "--accent": "#59d8a1",
+      "--danger": "#ff7575",
+      "--body-glow-a": "rgba(41, 116, 255, 0.22)",
+      "--body-glow-b": "rgba(86, 212, 153, 0.15)",
+      "--panel-shadow": "0 28px 76px rgba(0, 0, 0, 0.5)",
+      "--surface-elevated": "rgba(9, 13, 26, 0.78)",
+      "--surface-strong": "rgba(12, 17, 30, 0.9)",
+      "--surface-input": "rgba(8, 11, 21, 0.92)",
+      "--surface-muted": "rgba(8, 10, 18, 0.78)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(11, 15, 27, 0.9), rgba(9, 13, 22, 0.78))",
+      "--border-soft": "rgba(136, 151, 183, 0.32)",
+      "--border-strong": "rgba(124, 141, 182, 0.38)",
+      "--text-soft-contrast": "#b7c8ea",
+      "--highlight-bg": "rgba(89, 216, 161, 0.22)",
+      "--highlight-text": "#d8fff1",
+      "--result-hover": "rgba(77, 143, 224, 0.1)",
+    },
+    light: {
+      "--bg-deep": "#eef4ff",
+      "--bg-mid": "#d8e6fb",
+      "--panel": "rgba(248, 252, 255, 0.93)",
+      "--panel-border": "rgba(124, 141, 182, 0.44)",
+      "--text-main": "#1b2c47",
+      "--text-muted": "#587096",
+      "--accent": "#2f9d73",
+      "--danger": "#b53d3d",
+      "--body-glow-a": "rgba(58, 124, 227, 0.24)",
+      "--body-glow-b": "rgba(71, 190, 150, 0.2)",
+      "--panel-shadow": "0 24px 58px rgba(78, 108, 156, 0.24)",
+      "--surface-elevated": "rgba(228, 236, 252, 0.84)",
+      "--surface-strong": "rgba(241, 246, 255, 0.95)",
+      "--surface-input": "rgba(246, 250, 255, 0.97)",
+      "--surface-muted": "rgba(236, 243, 255, 0.9)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(228, 236, 252, 0.95), rgba(236, 243, 255, 0.88))",
+      "--border-soft": "rgba(114, 139, 185, 0.34)",
+      "--border-strong": "rgba(104, 129, 177, 0.42)",
+      "--text-soft-contrast": "#38547c",
+      "--highlight-bg": "rgba(57, 151, 115, 0.2)",
+      "--highlight-text": "#123a2e",
+      "--result-hover": "rgba(91, 135, 214, 0.12)",
+    },
+    preview: {
+      dark: {
+        bg: "#0b1120",
+        panel: "#172137",
+        panelAlt: "#11192c",
+        accent: "#59d8a1",
+        text: "#edf2ff",
+        muted: "#90a5c8",
+        glow: "rgba(89, 216, 161, 0.24)",
+      },
+      light: {
+        bg: "#eaf3ff",
+        panel: "#f8fbff",
+        panelAlt: "#dbe8f8",
+        accent: "#2f9d73",
+        text: "#1b2c47",
+        muted: "#5f789b",
+        glow: "rgba(47, 157, 115, 0.18)",
+      },
+    },
+  },
+  {
+    id: "nordic",
+    label: "Nordic Ink",
+    description: "Deep navy with cool aqua edges.",
+    dark: {
+      "--bg-deep": "#0b1620",
+      "--bg-mid": "#162635",
+      "--panel": "rgba(17, 31, 45, 0.84)",
+      "--panel-border": "rgba(121, 160, 177, 0.28)",
+      "--text-main": "#ebf7ff",
+      "--text-muted": "#97b4c4",
+      "--accent": "#56c7ce",
+      "--danger": "#ff8a88",
+      "--body-glow-a": "rgba(59, 132, 180, 0.2)",
+      "--body-glow-b": "rgba(86, 199, 187, 0.18)",
+      "--panel-shadow": "0 28px 76px rgba(0, 0, 0, 0.46)",
+      "--surface-elevated": "rgba(12, 24, 36, 0.78)",
+      "--surface-strong": "rgba(16, 30, 43, 0.91)",
+      "--surface-input": "rgba(10, 21, 32, 0.94)",
+      "--surface-muted": "rgba(9, 20, 30, 0.82)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(15, 30, 43, 0.92), rgba(10, 20, 30, 0.8))",
+      "--border-soft": "rgba(120, 154, 169, 0.3)",
+      "--border-strong": "rgba(112, 160, 176, 0.38)",
+      "--text-soft-contrast": "#c1e7ef",
+      "--highlight-bg": "rgba(86, 199, 206, 0.22)",
+      "--highlight-text": "#d8ffff",
+      "--result-hover": "rgba(79, 172, 188, 0.11)",
+    },
+    light: {
+      "--bg-deep": "#eef7fb",
+      "--bg-mid": "#d9ebf3",
+      "--panel": "rgba(248, 252, 255, 0.94)",
+      "--panel-border": "rgba(111, 145, 162, 0.36)",
+      "--text-main": "#173141",
+      "--text-muted": "#567387",
+      "--accent": "#2c99a6",
+      "--danger": "#b84a4a",
+      "--body-glow-a": "rgba(86, 160, 194, 0.22)",
+      "--body-glow-b": "rgba(93, 197, 184, 0.18)",
+      "--panel-shadow": "0 24px 58px rgba(73, 106, 124, 0.2)",
+      "--surface-elevated": "rgba(229, 241, 247, 0.88)",
+      "--surface-strong": "rgba(243, 249, 252, 0.96)",
+      "--surface-input": "rgba(248, 252, 254, 0.97)",
+      "--surface-muted": "rgba(235, 245, 249, 0.92)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(230, 240, 246, 0.96), rgba(238, 247, 251, 0.9))",
+      "--border-soft": "rgba(108, 142, 156, 0.28)",
+      "--border-strong": "rgba(100, 145, 162, 0.36)",
+      "--text-soft-contrast": "#355f76",
+      "--highlight-bg": "rgba(44, 153, 166, 0.18)",
+      "--highlight-text": "#103640",
+      "--result-hover": "rgba(74, 158, 177, 0.12)",
+    },
+    preview: {
+      dark: {
+        bg: "#11202d",
+        panel: "#1a3043",
+        panelAlt: "#152537",
+        accent: "#56c7ce",
+        text: "#ecf8ff",
+        muted: "#8faab8",
+        glow: "rgba(86, 199, 206, 0.24)",
+      },
+      light: {
+        bg: "#eff8fb",
+        panel: "#f9fdff",
+        panelAlt: "#d8eaf1",
+        accent: "#2c99a6",
+        text: "#173141",
+        muted: "#567387",
+        glow: "rgba(44, 153, 166, 0.18)",
+      },
+    },
+  },
+  {
+    id: "slate",
+    label: "Win Slate",
+    description: "A calm Windows 11-style steel palette.",
+    dark: {
+      "--bg-deep": "#171b22",
+      "--bg-mid": "#262b32",
+      "--panel": "rgba(31, 36, 44, 0.86)",
+      "--panel-border": "rgba(136, 149, 171, 0.26)",
+      "--text-main": "#f1f5fb",
+      "--text-muted": "#aab4c6",
+      "--accent": "#7ab3ff",
+      "--danger": "#ff7c86",
+      "--body-glow-a": "rgba(86, 123, 184, 0.18)",
+      "--body-glow-b": "rgba(122, 179, 255, 0.16)",
+      "--panel-shadow": "0 28px 76px rgba(0, 0, 0, 0.44)",
+      "--surface-elevated": "rgba(28, 34, 42, 0.8)",
+      "--surface-strong": "rgba(34, 40, 49, 0.92)",
+      "--surface-input": "rgba(23, 28, 36, 0.95)",
+      "--surface-muted": "rgba(24, 29, 37, 0.84)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(34, 40, 49, 0.92), rgba(25, 30, 38, 0.8))",
+      "--border-soft": "rgba(137, 150, 170, 0.28)",
+      "--border-strong": "rgba(131, 148, 173, 0.36)",
+      "--text-soft-contrast": "#cdd9ee",
+      "--highlight-bg": "rgba(122, 179, 255, 0.2)",
+      "--highlight-text": "#eef6ff",
+      "--result-hover": "rgba(122, 179, 255, 0.1)",
+    },
+    light: {
+      "--bg-deep": "#f0f3f7",
+      "--bg-mid": "#dfe5ed",
+      "--panel": "rgba(250, 252, 255, 0.95)",
+      "--panel-border": "rgba(126, 138, 157, 0.34)",
+      "--text-main": "#1f2835",
+      "--text-muted": "#657385",
+      "--accent": "#3a82e6",
+      "--danger": "#b44752",
+      "--body-glow-a": "rgba(93, 127, 189, 0.18)",
+      "--body-glow-b": "rgba(118, 171, 245, 0.16)",
+      "--panel-shadow": "0 24px 58px rgba(72, 85, 107, 0.18)",
+      "--surface-elevated": "rgba(232, 238, 245, 0.9)",
+      "--surface-strong": "rgba(244, 247, 251, 0.96)",
+      "--surface-input": "rgba(248, 250, 253, 0.98)",
+      "--surface-muted": "rgba(237, 242, 247, 0.92)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(232, 237, 244, 0.96), rgba(241, 245, 250, 0.9))",
+      "--border-soft": "rgba(120, 132, 150, 0.28)",
+      "--border-strong": "rgba(115, 128, 147, 0.34)",
+      "--text-soft-contrast": "#495c73",
+      "--highlight-bg": "rgba(58, 130, 230, 0.18)",
+      "--highlight-text": "#0f2448",
+      "--result-hover": "rgba(87, 146, 230, 0.11)",
+    },
+    preview: {
+      dark: {
+        bg: "#1d222a",
+        panel: "#2a313b",
+        panelAlt: "#212831",
+        accent: "#7ab3ff",
+        text: "#f1f5fb",
+        muted: "#aab4c6",
+        glow: "rgba(122, 179, 255, 0.22)",
+      },
+      light: {
+        bg: "#eff3f7",
+        panel: "#fbfcfe",
+        panelAlt: "#dde4ec",
+        accent: "#3a82e6",
+        text: "#1f2835",
+        muted: "#657385",
+        glow: "rgba(58, 130, 230, 0.16)",
+      },
+    },
+  },
+  {
+    id: "ember",
+    label: "Ember",
+    description: "Warm copper highlights over dark charcoal.",
+    dark: {
+      "--bg-deep": "#160f10",
+      "--bg-mid": "#2a1d21",
+      "--panel": "rgba(33, 23, 27, 0.86)",
+      "--panel-border": "rgba(190, 127, 94, 0.24)",
+      "--text-main": "#fff1ea",
+      "--text-muted": "#d2a894",
+      "--accent": "#ff9b62",
+      "--danger": "#ff6f78",
+      "--body-glow-a": "rgba(242, 131, 82, 0.2)",
+      "--body-glow-b": "rgba(255, 176, 85, 0.14)",
+      "--panel-shadow": "0 28px 76px rgba(0, 0, 0, 0.46)",
+      "--surface-elevated": "rgba(28, 19, 23, 0.8)",
+      "--surface-strong": "rgba(36, 24, 28, 0.92)",
+      "--surface-input": "rgba(23, 16, 18, 0.95)",
+      "--surface-muted": "rgba(27, 17, 20, 0.84)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(35, 24, 28, 0.92), rgba(23, 16, 19, 0.8))",
+      "--border-soft": "rgba(176, 122, 98, 0.28)",
+      "--border-strong": "rgba(195, 130, 96, 0.36)",
+      "--text-soft-contrast": "#ffd0bc",
+      "--highlight-bg": "rgba(255, 155, 98, 0.22)",
+      "--highlight-text": "#fff5ef",
+      "--result-hover": "rgba(255, 155, 98, 0.1)",
+    },
+    light: {
+      "--bg-deep": "#fff3eb",
+      "--bg-mid": "#f7dfd2",
+      "--panel": "rgba(255, 250, 247, 0.95)",
+      "--panel-border": "rgba(195, 137, 105, 0.3)",
+      "--text-main": "#45231d",
+      "--text-muted": "#936556",
+      "--accent": "#d66c37",
+      "--danger": "#b33d46",
+      "--body-glow-a": "rgba(229, 132, 83, 0.2)",
+      "--body-glow-b": "rgba(255, 186, 91, 0.16)",
+      "--panel-shadow": "0 24px 58px rgba(133, 89, 67, 0.18)",
+      "--surface-elevated": "rgba(249, 233, 224, 0.9)",
+      "--surface-strong": "rgba(255, 247, 242, 0.97)",
+      "--surface-input": "rgba(255, 251, 248, 0.98)",
+      "--surface-muted": "rgba(251, 240, 233, 0.92)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(249, 233, 224, 0.96), rgba(253, 244, 238, 0.9))",
+      "--border-soft": "rgba(188, 132, 101, 0.28)",
+      "--border-strong": "rgba(178, 126, 98, 0.34)",
+      "--text-soft-contrast": "#8a4f3d",
+      "--highlight-bg": "rgba(214, 108, 55, 0.18)",
+      "--highlight-text": "#4b2418",
+      "--result-hover": "rgba(214, 108, 55, 0.1)",
+    },
+    preview: {
+      dark: {
+        bg: "#1b1416",
+        panel: "#332227",
+        panelAlt: "#281b1f",
+        accent: "#ff9b62",
+        text: "#fff1ea",
+        muted: "#d1a693",
+        glow: "rgba(255, 155, 98, 0.24)",
+      },
+      light: {
+        bg: "#fff4ec",
+        panel: "#fffaf6",
+        panelAlt: "#f4dfd2",
+        accent: "#d66c37",
+        text: "#45231d",
+        muted: "#936556",
+        glow: "rgba(214, 108, 55, 0.18)",
+      },
+    },
+  },
+  {
+    id: "cedar",
+    label: "Cedar",
+    description: "Calm workstation green with softer contrast.",
+    dark: {
+      "--bg-deep": "#09110f",
+      "--bg-mid": "#14241d",
+      "--panel": "rgba(15, 25, 22, 0.84)",
+      "--panel-border": "rgba(112, 162, 129, 0.24)",
+      "--text-main": "#eefcf5",
+      "--text-muted": "#96b7a6",
+      "--accent": "#67d69a",
+      "--danger": "#ff7d8e",
+      "--body-glow-a": "rgba(70, 158, 122, 0.18)",
+      "--body-glow-b": "rgba(120, 220, 171, 0.16)",
+      "--panel-shadow": "0 28px 76px rgba(0, 0, 0, 0.46)",
+      "--surface-elevated": "rgba(11, 20, 17, 0.8)",
+      "--surface-strong": "rgba(15, 27, 22, 0.92)",
+      "--surface-input": "rgba(8, 18, 14, 0.95)",
+      "--surface-muted": "rgba(10, 18, 15, 0.84)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(15, 27, 22, 0.92), rgba(9, 17, 14, 0.8))",
+      "--border-soft": "rgba(117, 161, 134, 0.28)",
+      "--border-strong": "rgba(114, 170, 135, 0.36)",
+      "--text-soft-contrast": "#c4efd9",
+      "--highlight-bg": "rgba(103, 214, 154, 0.2)",
+      "--highlight-text": "#effff5",
+      "--result-hover": "rgba(103, 214, 154, 0.1)",
+    },
+    light: {
+      "--bg-deep": "#eff7f1",
+      "--bg-mid": "#dcebdd",
+      "--panel": "rgba(249, 253, 249, 0.95)",
+      "--panel-border": "rgba(108, 148, 122, 0.32)",
+      "--text-main": "#1d3428",
+      "--text-muted": "#5d7e6e",
+      "--accent": "#31965f",
+      "--danger": "#b24454",
+      "--body-glow-a": "rgba(66, 155, 117, 0.18)",
+      "--body-glow-b": "rgba(109, 209, 161, 0.16)",
+      "--panel-shadow": "0 24px 58px rgba(80, 111, 93, 0.18)",
+      "--surface-elevated": "rgba(232, 241, 232, 0.9)",
+      "--surface-strong": "rgba(246, 250, 246, 0.97)",
+      "--surface-input": "rgba(250, 252, 250, 0.98)",
+      "--surface-muted": "rgba(239, 245, 239, 0.92)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(232, 241, 232, 0.96), rgba(241, 247, 241, 0.9))",
+      "--border-soft": "rgba(111, 148, 123, 0.28)",
+      "--border-strong": "rgba(104, 141, 118, 0.34)",
+      "--text-soft-contrast": "#426856",
+      "--highlight-bg": "rgba(49, 150, 95, 0.18)",
+      "--highlight-text": "#123322",
+      "--result-hover": "rgba(73, 164, 111, 0.1)",
+    },
+    preview: {
+      dark: {
+        bg: "#0f1b17",
+        panel: "#193027",
+        panelAlt: "#12231c",
+        accent: "#67d69a",
+        text: "#eefcf5",
+        muted: "#96b7a6",
+        glow: "rgba(103, 214, 154, 0.22)",
+      },
+      light: {
+        bg: "#eff7f1",
+        panel: "#fbfefb",
+        panelAlt: "#dcebdd",
+        accent: "#31965f",
+        text: "#1d3428",
+        muted: "#5d7e6e",
+        glow: "rgba(49, 150, 95, 0.16)",
+      },
+    },
+  },
+  {
+    id: "solar",
+    label: "Solar Sand",
+    description: "Warm sandstone tones with gold accents.",
+    dark: {
+      "--bg-deep": "#15120b",
+      "--bg-mid": "#2a2417",
+      "--panel": "rgba(32, 27, 18, 0.85)",
+      "--panel-border": "rgba(180, 150, 94, 0.24)",
+      "--text-main": "#fff7e6",
+      "--text-muted": "#d3bf95",
+      "--accent": "#e8c15a",
+      "--danger": "#ff7f78",
+      "--body-glow-a": "rgba(212, 164, 70, 0.18)",
+      "--body-glow-b": "rgba(244, 214, 115, 0.14)",
+      "--panel-shadow": "0 28px 76px rgba(0, 0, 0, 0.46)",
+      "--surface-elevated": "rgba(23, 19, 12, 0.8)",
+      "--surface-strong": "rgba(31, 26, 17, 0.92)",
+      "--surface-input": "rgba(19, 16, 10, 0.95)",
+      "--surface-muted": "rgba(22, 18, 11, 0.84)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(31, 26, 17, 0.92), rgba(20, 17, 10, 0.8))",
+      "--border-soft": "rgba(173, 148, 96, 0.28)",
+      "--border-strong": "rgba(187, 157, 92, 0.36)",
+      "--text-soft-contrast": "#f5ddb0",
+      "--highlight-bg": "rgba(232, 193, 90, 0.2)",
+      "--highlight-text": "#fff8ea",
+      "--result-hover": "rgba(232, 193, 90, 0.1)",
+    },
+    light: {
+      "--bg-deep": "#fbf5e7",
+      "--bg-mid": "#efe2be",
+      "--panel": "rgba(255, 253, 248, 0.95)",
+      "--panel-border": "rgba(172, 147, 95, 0.3)",
+      "--text-main": "#44351a",
+      "--text-muted": "#8c7751",
+      "--accent": "#b88f1f",
+      "--danger": "#b3453f",
+      "--body-glow-a": "rgba(201, 160, 67, 0.18)",
+      "--body-glow-b": "rgba(236, 204, 111, 0.14)",
+      "--panel-shadow": "0 24px 58px rgba(121, 102, 61, 0.18)",
+      "--surface-elevated": "rgba(245, 236, 213, 0.9)",
+      "--surface-strong": "rgba(255, 251, 243, 0.97)",
+      "--surface-input": "rgba(255, 253, 248, 0.98)",
+      "--surface-muted": "rgba(248, 241, 223, 0.92)",
+      "--surface-toolbar":
+        "linear-gradient(180deg, rgba(245, 236, 213, 0.96), rgba(251, 246, 231, 0.9))",
+      "--border-soft": "rgba(171, 145, 90, 0.28)",
+      "--border-strong": "rgba(165, 140, 87, 0.34)",
+      "--text-soft-contrast": "#7a6537",
+      "--highlight-bg": "rgba(184, 143, 31, 0.18)",
+      "--highlight-text": "#46340a",
+      "--result-hover": "rgba(184, 143, 31, 0.1)",
+    },
+    preview: {
+      dark: {
+        bg: "#1c170e",
+        panel: "#322919",
+        panelAlt: "#251f13",
+        accent: "#e8c15a",
+        text: "#fff7e6",
+        muted: "#d3bf95",
+        glow: "rgba(232, 193, 90, 0.22)",
+      },
+      light: {
+        bg: "#fbf4e5",
+        panel: "#fffdf8",
+        panelAlt: "#ede1bf",
+        accent: "#b88f1f",
+        text: "#44351a",
+        muted: "#8c7751",
+        glow: "rgba(184, 143, 31, 0.18)",
+      },
+    },
+  },
+];
 const RESULT_VIEW_TABS: Array<{ id: ResultViewTab; label: string }> = [
   { id: "all", label: "All" },
   { id: "apps", label: "Apps" },
@@ -198,6 +677,127 @@ function SocialIcon({ icon }: { icon: SocialIconName }) {
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 11.944 0zm5.255 8.599c-.162 1.703-.866 5.834-1.224 7.741-.151.807-.449 1.078-.737 1.104-.625.058-1.1-.413-1.706-.81-.949-.624-1.485-1.012-2.405-1.621-1.063-.699-.374-1.083.232-1.715.159-.166 2.91-2.666 2.963-2.895.006-.028.013-.133-.05-.189s-.156-.037-.223-.022c-.095.021-1.597 1.014-4.507 2.979-.427.294-.814.437-1.161.429-.382-.008-1.117-.216-1.664-.394-.67-.218-1.203-.334-1.157-.705.024-.193.291-.391.8-.593 3.132-1.364 5.221-2.264 6.268-2.699 2.986-1.242 3.607-1.458 4.011-1.465.088-.002.285.02.413.124.108.087.138.205.152.288.014.083.031.272.017.42z" />
     </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.5" y="5.5" width="17" height="15" rx="2.5" />
+      <path d="M7 3.75v3.5M17 3.75v3.5M3.5 9.5h17M8 13h3M13 13h3M8 17h3" />
+    </svg>
+  );
+}
+
+function StepChevronIcon({ direction }: { direction: "up" | "down" }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d={direction === "up" ? "M3.5 10 8 5.5 12.5 10" : "M3.5 6 8 10.5 12.5 6"} />
+    </svg>
+  );
+}
+
+function openDateInputPicker(input: HTMLInputElement | null): void {
+  if (!input) {
+    return;
+  }
+
+  input.focus();
+  try {
+    const pickerInput = input as HTMLInputElement & { showPicker?: () => void };
+    if (typeof pickerInput.showPicker === "function") {
+      pickerInput.showPicker();
+      return;
+    }
+  } catch {
+    // Ignore and fall back to a normal click below.
+  }
+
+  input.click();
+}
+
+type NumberInputFieldProps = {
+  id?: string;
+  value: string;
+  min?: number;
+  max?: number;
+  step?: number | string;
+  placeholder?: string;
+  ariaLabel?: string;
+  onChange: (value: string) => void;
+};
+
+function NumberInputField({
+  id,
+  value,
+  min,
+  max,
+  step = 1,
+  placeholder,
+  ariaLabel,
+  onChange,
+}: NumberInputFieldProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const nudgeValue = (direction: "up" | "down") => {
+    const input = inputRef.current;
+    if (!input) {
+      return;
+    }
+
+    input.focus();
+    if (direction === "up") {
+      input.stepUp();
+    } else {
+      input.stepDown();
+    }
+    onChange(input.value);
+  };
+
+  return (
+    <div className="number-input-shell">
+      <input
+        ref={inputRef}
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        placeholder={placeholder}
+        inputMode="numeric"
+        aria-label={ariaLabel}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+      <div className="number-input-steppers" aria-hidden="true">
+        <button
+          type="button"
+          className="number-input-stepper"
+          tabIndex={-1}
+          onMouseDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={() => {
+            nudgeValue("up");
+          }}
+        >
+          <StepChevronIcon direction="up" />
+        </button>
+        <button
+          type="button"
+          className="number-input-stepper"
+          tabIndex={-1}
+          onMouseDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={() => {
+            nudgeValue("down");
+          }}
+        >
+          <StepChevronIcon direction="down" />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -446,6 +1046,38 @@ function highlightMatch(text: string, queryValue: string): ReactNode {
   return <>{nodes}</>;
 }
 
+function hasSelectedText(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const selection = window.getSelection();
+  return Boolean(selection && selection.toString().trim().length > 0);
+}
+
+function isThemePresetId(value: string | null): value is ThemePresetId {
+  return value !== null && THEME_PRESET_IDS.includes(value as ThemePresetId);
+}
+
+function themePresetById(id: ThemePresetId): ThemePreset {
+  return (
+    THEME_PRESETS.find((preset) => preset.id === id) ??
+    THEME_PRESETS.find((preset) => preset.id === "slate") ??
+    THEME_PRESETS[0]
+  );
+}
+
+function themePreviewStyle(preview: ThemePreviewSwatch): CSSProperties {
+  return {
+    "--theme-preview-bg": preview.bg,
+    "--theme-preview-panel": preview.panel,
+    "--theme-preview-panel-alt": preview.panelAlt,
+    "--theme-preview-accent": preview.accent,
+    "--theme-preview-text": preview.text,
+    "--theme-preview-muted": preview.muted,
+    "--theme-preview-glow": preview.glow,
+  } as CSSProperties;
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") {
@@ -456,6 +1088,16 @@ function App() {
       return saved;
     }
     return "dark";
+  });
+  const [themePreset, setThemePreset] = useState<ThemePresetId>(() => {
+    if (typeof window === "undefined") {
+      return "slate";
+    }
+    const saved = window.localStorage.getItem(THEME_PRESET_STORAGE_KEY);
+    if (isThemePresetId(saved)) {
+      return saved;
+    }
+    return "slate";
   });
   const [status, setStatus] = useState<IndexStatus>({
     indexing: false,
@@ -484,6 +1126,7 @@ function App() {
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
   const [duplicatesLoading, setDuplicatesLoading] = useState(false);
   const [duplicatesError, setDuplicatesError] = useState<string | null>(null);
+  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
   const [duplicateScanStatus, setDuplicateScanStatus] = useState<DuplicateScanStatus>({
     running: false,
     cancelRequested: false,
@@ -545,6 +1188,10 @@ function App() {
   const [appVersion, setAppVersion] = useState<string>("");
   const previousIndexedCountRef = useRef<number | null>(null);
   const indexSyncTimeoutRef = useRef<number | null>(null);
+  const duplicateNoticeTimeoutRef = useRef<number | null>(null);
+  const createdAfterInputRef = useRef<HTMLInputElement | null>(null);
+  const createdBeforeInputRef = useRef<HTMLInputElement | null>(null);
+  const activeThemePreset = themePresetById(themePreset);
 
   const hasFilters =
     extension.trim().length > 0 ||
@@ -552,8 +1199,28 @@ function App() {
     maxSizeMb.trim().length > 0 ||
     createdAfter.length > 0 ||
     createdBefore.length > 0;
+  const hasMetadataFilters =
+    minSizeMb.trim().length > 0 ||
+    maxSizeMb.trim().length > 0 ||
+    createdAfter.length > 0 ||
+    createdBefore.length > 0;
 
   const selectedDriveInfo = drives.find((drive) => drive.letter === selectedDrive);
+  const hasAnyFallbackDrive = useMemo(
+    () => drives.some((drive) => drive.isNtfs && !drive.canOpenVolume),
+    [drives],
+  );
+  const isSelectedDriveFallback = Boolean(
+    selectedDriveInfo && selectedDriveInfo.isNtfs && !selectedDriveInfo.canOpenVolume,
+  );
+  const isFallbackModeActive = includeAllDrives ? hasAnyFallbackDrive : isSelectedDriveFallback;
+  const fallbackModeMessage = includeAllDrives
+    ? "Running in fallback mode on one or more drives. Indexing still works, but it is slower and live updates are limited. Run OmniSearch as administrator for best performance."
+    : "Running in fallback mode on this drive. Indexing still works, but it is slower and live updates are limited. Run OmniSearch as administrator for best performance.";
+  const visibleStatusError =
+    status.lastError && status.lastError.toLowerCase().includes(DUPLICATE_CANCEL_MESSAGE.toLowerCase())
+      ? null
+      : status.lastError;
   const trimmedQuery = query.trim();
   const requestedIndexConfigKey = includeAllDrives
     ? `ALL:${includeFolders ? "1" : "0"}`
@@ -604,6 +1271,9 @@ function App() {
       if (rankDiff !== 0) {
         return rankDiff;
       }
+      if (left.isDirectory !== right.isDirectory) {
+        return left.isDirectory ? 1 : -1;
+      }
       if (right.modifiedUnix !== left.modifiedUnix) {
         return right.modifiedUnix - left.modifiedUnix;
       }
@@ -636,9 +1306,27 @@ function App() {
   }, [duplicateGroups]);
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", themeMode);
+    const root = document.documentElement;
+    root.setAttribute("data-theme", themeMode);
+    root.setAttribute("data-theme-preset", themePreset);
+    const palette = activeThemePreset[themeMode];
+    for (const [token, value] of Object.entries(palette)) {
+      root.style.setProperty(token, value);
+    }
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
-  }, [themeMode]);
+    window.localStorage.setItem(THEME_PRESET_STORAGE_KEY, themePreset);
+  }, [activeThemePreset, themeMode, themePreset]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      document.body.classList.add("app-boot-ready");
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.body.classList.remove("app-boot-ready");
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -668,6 +1356,45 @@ function App() {
       window.removeEventListener("contextmenu", suppressContextMenu, true);
     };
   }, []);
+
+  useEffect(() => {
+    const scrollContainers = Array.from(
+      document.querySelectorAll<HTMLElement>(".scrollable-tab-panel"),
+    );
+    if (scrollContainers.length === 0) {
+      return;
+    }
+
+    const timeouts = new Map<HTMLElement, number>();
+    const listeners = scrollContainers.map((container) => {
+      container.dataset.scrollState = "idle";
+      const handleScroll = () => {
+        container.dataset.scrollState = "active";
+        const existingTimeout = timeouts.get(container);
+        if (existingTimeout !== undefined) {
+          window.clearTimeout(existingTimeout);
+        }
+        const timeout = window.setTimeout(() => {
+          container.dataset.scrollState = "idle";
+          timeouts.delete(container);
+        }, 720);
+        timeouts.set(container, timeout);
+      };
+
+      container.addEventListener("scroll", handleScroll, { passive: true });
+      return { container, handleScroll };
+    });
+
+    return () => {
+      for (const { container, handleScroll } of listeners) {
+        container.removeEventListener("scroll", handleScroll);
+        container.dataset.scrollState = "idle";
+      }
+      for (const timeout of timeouts.values()) {
+        window.clearTimeout(timeout);
+      }
+    };
+  }, [activeTab, duplicateGroups.length, results.length]);
 
   useEffect(() => {
     window.localStorage.setItem(PREVIEW_STORAGE_KEY, showPreviews ? "1" : "0");
@@ -930,6 +1657,9 @@ function App() {
       if (indexSyncTimeoutRef.current !== null) {
         window.clearTimeout(indexSyncTimeoutRef.current);
       }
+      if (duplicateNoticeTimeoutRef.current !== null) {
+        window.clearTimeout(duplicateNoticeTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -943,6 +1673,7 @@ function App() {
     }
 
     let active = true;
+    const debounceMs = hasMetadataFilters ? FILTER_SEARCH_DEBOUNCE_MS : SEARCH_DEBOUNCE_MS;
     const timer = window.setTimeout(() => {
       const runSearch = async () => {
         setLoading(true);
@@ -952,14 +1683,21 @@ function App() {
         const maxCreatedUnix = toUnixEnd(createdBefore);
 
         try {
-          const found = await invoke<SearchResult[]>("search_files", {
+          const searchArgs = {
             query: trimmedQuery,
             extension: extension.trim(),
+            minSize,
             min_size: minSize,
+            maxSize,
             max_size: maxSize,
+            minCreatedUnix,
             min_created_unix: minCreatedUnix,
+            maxCreatedUnix,
             max_created_unix: maxCreatedUnix,
             limit: searchLimit,
+          };
+          const found = await invoke<SearchResult[]>("search_files", {
+            ...searchArgs,
           });
           if (active) {
             setResults(found);
@@ -978,29 +1716,46 @@ function App() {
       };
 
       void runSearch();
-    }, SEARCH_DEBOUNCE_MS);
+    }, debounceMs);
 
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [trimmedQuery, extension, minSizeMb, maxSizeMb, createdAfter, createdBefore, hasFilters, searchLimit]);
+  }, [
+    trimmedQuery,
+    extension,
+    minSizeMb,
+    maxSizeMb,
+    createdAfter,
+    createdBefore,
+    hasFilters,
+    hasMetadataFilters,
+    searchLimit,
+  ]);
 
-  async function reindex(): Promise<void> {
+  async function reindexWithConfig(
+    nextIncludeFolders: boolean,
+    nextIncludeAllDrives: boolean,
+  ): Promise<void> {
     if (!selectedDrive) {
       return;
     }
+    const nextConfigKey = nextIncludeAllDrives
+      ? `ALL:${nextIncludeFolders ? "1" : "0"}`
+      : `${selectedDrive}:${nextIncludeFolders ? "1" : "0"}`;
+
     try {
-      setPendingIndexConfigKey(requestedIndexConfigKey);
+      setPendingIndexConfigKey(nextConfigKey);
       const next = await invoke<IndexStatus>("start_indexing", {
         drive: selectedDrive,
-        includeFolders: includeFolders,
-        include_folders: includeFolders,
-        includeAllDrives: includeAllDrives,
-        include_all_drives: includeAllDrives,
+        includeFolders: nextIncludeFolders,
+        include_folders: nextIncludeFolders,
+        includeAllDrives: nextIncludeAllDrives,
+        include_all_drives: nextIncludeAllDrives,
       });
       setStatus(next);
-      setAppliedIndexConfigKey(requestedIndexConfigKey);
+      setAppliedIndexConfigKey(nextConfigKey);
       setPendingIndexConfigKey("");
     } catch (error) {
       setStatus((previous) => ({
@@ -1009,6 +1764,10 @@ function App() {
       }));
       setPendingIndexConfigKey("");
     }
+  }
+
+  async function reindex(): Promise<void> {
+    await reindexWithConfig(includeFolders, includeAllDrives);
   }
 
   function clearSearchFilters(): void {
@@ -1067,6 +1826,7 @@ function App() {
 
     setDuplicateGroups([]);
     setDuplicatesError(null);
+    setDuplicateNotice(null);
     setDuplicatesLoading(true);
     setDuplicateScanStatus({
       running: true,
@@ -1080,8 +1840,11 @@ function App() {
 
     try {
       const groups = await invoke<DuplicateGroup[]>("find_duplicate_groups", {
+        minSize,
         min_size: minSize,
+        maxGroups: 250,
         max_groups: 250,
+        maxFilesPerGroup: 40,
         max_files_per_group: 40,
       });
       setDuplicateGroups(groups);
@@ -1090,7 +1853,8 @@ function App() {
       setDuplicateGroups([]);
       const message = String(error);
       if (message.toLowerCase().includes("cancel")) {
-        setDuplicatesError("Duplicate scan cancelled.");
+        showDuplicateNotice(DUPLICATE_CANCEL_MESSAGE);
+        setDuplicatesError(null);
       } else {
         setDuplicatesError(message);
       }
@@ -1114,6 +1878,7 @@ function App() {
       const requested = await invoke<boolean>("cancel_duplicate_scan");
       if (requested) {
         setDuplicatesError(null);
+        setDuplicateNotice(null);
         setDuplicateScanStatus((previous) => ({
           ...previous,
           cancelRequested: true,
@@ -1178,6 +1943,7 @@ function App() {
   function clearDuplicateResults(): void {
     setDuplicateGroups([]);
     setDuplicatesError(null);
+    setDuplicateNotice(null);
     setDuplicateScanStatus({
       running: false,
       cancelRequested: false,
@@ -1186,6 +1952,17 @@ function App() {
       groupsFound: 0,
       progressPercent: 0,
     });
+  }
+
+  function showDuplicateNotice(message: string): void {
+    setDuplicateNotice(message);
+    if (duplicateNoticeTimeoutRef.current !== null) {
+      window.clearTimeout(duplicateNoticeTimeoutRef.current);
+    }
+    duplicateNoticeTimeoutRef.current = window.setTimeout(() => {
+      setDuplicateNotice(null);
+      duplicateNoticeTimeoutRef.current = null;
+    }, DUPLICATE_NOTICE_TIMEOUT_MS);
   }
 
   async function revealResult(path: string): Promise<void> {
@@ -1309,12 +2086,8 @@ function App() {
                 {drives
                   .filter((drive) => drive.isNtfs)
                   .map((drive) => (
-                    <option
-                      key={drive.letter}
-                      value={drive.letter}
-                      disabled={!drive.canOpenVolume}
-                    >
-                      {`${drive.letter}: (${drive.filesystem || "Unknown"})${drive.canOpenVolume ? "" : " - admin required"}`}
+                    <option key={drive.letter} value={drive.letter}>
+                      {`${drive.letter}: (${drive.filesystem || "Unknown"})${drive.canOpenVolume ? "" : " - fallback mode"}`}
                     </option>
                   ))}
               </select>
@@ -1329,7 +2102,9 @@ function App() {
                 type="checkbox"
                 checked={includeAllDrives}
                 onChange={(event) => {
-                  setIncludeAllDrives(event.currentTarget.checked);
+                  const nextIncludeAllDrives = event.currentTarget.checked;
+                  setIncludeAllDrives(nextIncludeAllDrives);
+                  void reindexWithConfig(includeFolders, nextIncludeAllDrives);
                 }}
               />
               <span className="scan-switch-slider" aria-hidden="true" />
@@ -1345,7 +2120,9 @@ function App() {
                 type="checkbox"
                 checked={includeFolders}
                 onChange={(event) => {
-                  setIncludeFolders(event.currentTarget.checked);
+                  const nextIncludeFolders = event.currentTarget.checked;
+                  setIncludeFolders(nextIncludeFolders);
+                  void reindexWithConfig(nextIncludeFolders, includeAllDrives);
                 }}
               />
               <span>Include folders</span>
@@ -1406,13 +2183,9 @@ function App() {
               <span>{statusText}</span>
             </div>
 
-            {status.lastError ? <p className="error-row">{status.lastError}</p> : null}
+            {visibleStatusError ? <p className="error-row">{visibleStatusError}</p> : null}
             {driveError ? <p className="error-row">{driveError}</p> : null}
-            {selectedDriveInfo && !selectedDriveInfo.canOpenVolume ? (
-              <p className="error-row">
-                The selected drive cannot be indexed without administrator privileges.
-              </p>
-            ) : null}
+            {isFallbackModeActive ? <p className="warning-row">{fallbackModeMessage}</p> : null}
 
             <input
               className="search-input"
@@ -1435,41 +2208,67 @@ function App() {
               </label>
               <label>
                 Min size (MB)
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
+                <NumberInputField
+                  min={0}
+                  step={1}
                   value={minSizeMb}
-                  onChange={(event) => setMinSizeMb(event.currentTarget.value)}
                   placeholder="0"
+                  ariaLabel="Minimum size in megabytes"
+                  onChange={setMinSizeMb}
                 />
               </label>
               <label>
                 Max size (MB)
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
+                <NumberInputField
+                  min={0}
+                  step={1}
                   value={maxSizeMb}
-                  onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
                   placeholder="2048"
+                  ariaLabel="Maximum size in megabytes"
+                  onChange={setMaxSizeMb}
                 />
               </label>
               <label>
                 Created after
-                <input
-                  type="date"
-                  value={createdAfter}
-                  onChange={(event) => setCreatedAfter(event.currentTarget.value)}
-                />
+                <div className="date-input-shell">
+                  <input
+                    ref={createdAfterInputRef}
+                    type="date"
+                    value={createdAfter}
+                    onChange={(event) => setCreatedAfter(event.currentTarget.value)}
+                  />
+                  <button
+                    type="button"
+                    className="date-input-trigger"
+                    aria-label="Open created after date picker"
+                    onClick={() => {
+                      openDateInputPicker(createdAfterInputRef.current);
+                    }}
+                  >
+                    <CalendarIcon />
+                  </button>
+                </div>
               </label>
               <label>
                 Created before
-                <input
-                  type="date"
-                  value={createdBefore}
-                  onChange={(event) => setCreatedBefore(event.currentTarget.value)}
-                />
+                <div className="date-input-shell">
+                  <input
+                    ref={createdBeforeInputRef}
+                    type="date"
+                    value={createdBefore}
+                    onChange={(event) => setCreatedBefore(event.currentTarget.value)}
+                  />
+                  <button
+                    type="button"
+                    className="date-input-trigger"
+                    aria-label="Open created before date picker"
+                    onClick={() => {
+                      openDateInputPicker(createdBeforeInputRef.current);
+                    }}
+                  >
+                    <CalendarIcon />
+                  </button>
+                </div>
               </label>
             </section>
 
@@ -1582,9 +2381,15 @@ function App() {
                       tabIndex={0}
                       title="Click to reveal in folder, double-click to open"
                       onClick={() => {
+                        if (hasSelectedText()) {
+                          return;
+                        }
                         void revealResult(result.path);
                       }}
                       onDoubleClick={() => {
+                        if (hasSelectedText()) {
+                          return;
+                        }
                         void openResult(result.path);
                       }}
                       onKeyDown={(event) => {
@@ -1712,24 +2517,20 @@ function App() {
               <span>{statusText}</span>
             </div>
 
-            {status.lastError ? <p className="error-row">{status.lastError}</p> : null}
+            {visibleStatusError ? <p className="error-row">{visibleStatusError}</p> : null}
             {driveError ? <p className="error-row">{driveError}</p> : null}
-            {selectedDriveInfo && !selectedDriveInfo.canOpenVolume ? (
-              <p className="error-row">
-                The selected drive cannot be indexed without administrator privileges.
-              </p>
-            ) : null}
+            {isFallbackModeActive ? <p className="warning-row">{fallbackModeMessage}</p> : null}
 
             <section className="duplicate-controls">
               <label className="duplicate-size-input">
                 <span>Min file size (MB)</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
+                <NumberInputField
+                  min={0}
+                  step={1}
                   value={duplicateMinSizeMb}
-                  onChange={(event) => setDuplicateMinSizeMb(event.currentTarget.value)}
                   placeholder="50"
+                  ariaLabel="Minimum duplicate file size in megabytes"
+                  onChange={setDuplicateMinSizeMb}
                 />
               </label>
               <button
@@ -1805,6 +2606,7 @@ function App() {
               ) : null}
 
               {duplicatesLoading ? <p className="hint compact-hint">Scanning for duplicates...</p> : null}
+              {duplicateNotice ? <p className="info-row">{duplicateNotice}</p> : null}
               {duplicatesError ? <p className="error-row">{duplicatesError}</p> : null}
               {!duplicatesLoading && !duplicatesError && duplicateGroups.length === 0 ? (
                 <p className="hint compact-hint">
@@ -1872,11 +2674,17 @@ function App() {
                           title="Click to reveal in folder, double-click to open"
                           onClick={() => {
                             if (hasPath) {
+                              if (hasSelectedText()) {
+                                return;
+                              }
                               void revealResult(cleanedPath);
                             }
                           }}
                           onDoubleClick={() => {
                             if (hasPath) {
+                              if (hasSelectedText()) {
+                                return;
+                              }
                               void openResult(cleanedPath);
                             }
                           }}
@@ -2023,52 +2831,136 @@ function App() {
         ) : null}
 
         {activeTab === "advanced" ? (
-          <section className="tab-panel" aria-label="Advanced settings">
+          <section className="tab-panel scrollable-tab-panel" aria-label="Advanced settings">
             <div className="about-panel advanced-panel">
               <div className="about-header">
                 <div>
                   <h2>Advanced settings</h2>
                   <p className="about-tagline">
-                    Control how many search results load at once.
+                    Choose a full app look and tune how many results load at once.
                   </p>
                 </div>
               </div>
 
               <div className="advanced-settings">
-                <label htmlFor="search-limit-input">
-                  Results per search (range {SEARCH_LIMIT_MIN} - {SEARCH_LIMIT_MAX})
-                </label>
-                <input
-                  id="search-limit-input"
-                  type="number"
-                  min={SEARCH_LIMIT_MIN}
-                  max={SEARCH_LIMIT_MAX}
-                  step="50"
-                  value={searchLimitInput}
-                  onChange={(event) => {
-                    setSearchLimitInput(event.currentTarget.value);
-                    if (settingsError) {
-                      setSettingsError(null);
-                    }
-                    if (settingsMessage) {
-                      setSettingsMessage(null);
-                    }
-                  }}
-                />
-                <div className="advanced-settings-actions">
-                  <button type="button" className="ghost-button" onClick={applySearchLimitPreference}>
-                    Update
-                  </button>
-                  <button type="button" className="ghost-button" onClick={resetSearchLimitPreference}>
-                    Reset default ({SEARCH_LIMIT})
-                  </button>
+                <div className="advanced-settings-section">
+                  <div className="advanced-section-header">
+                    <div>
+                      <h3>Theme gallery</h3>
+                      <p className="advanced-note">
+                        Pick a complete app style. Every preset adapts to both dark and light
+                        mode.
+                      </p>
+                    </div>
+                    <span className="theme-mode-status">
+                      {themeMode === "dark" ? "Dark mode active" : "Light mode active"}
+                    </span>
+                  </div>
+
+                  <div className="theme-grid" aria-label="Theme presets">
+                    {THEME_PRESET_IDS.map((presetId) => {
+                      const preset = themePresetById(presetId);
+                      const isActive = preset.id === themePreset;
+
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className={`theme-card ${isActive ? "is-active" : ""}`}
+                          aria-pressed={isActive}
+                          onClick={() => {
+                            setThemePreset(preset.id);
+                          }}
+                        >
+                          <div className="theme-card-preview" aria-hidden="true">
+                            <div className="theme-mini" style={themePreviewStyle(preset.preview.dark)}>
+                              <div className="theme-mini-header">
+                                <span className="theme-mini-label">Dark</span>
+                                <span className="theme-mini-dot" />
+                              </div>
+                              <div className="theme-mini-search-bar" />
+                              <div className="theme-mini-tabs">
+                                <span className="theme-mini-pill theme-mini-pill-accent" />
+                                <span className="theme-mini-pill" />
+                              </div>
+                              <div className="theme-mini-list">
+                                <span className="theme-mini-line" />
+                                <span className="theme-mini-line theme-mini-line-short" />
+                              </div>
+                            </div>
+
+                            <div className="theme-mini" style={themePreviewStyle(preset.preview.light)}>
+                              <div className="theme-mini-header">
+                                <span className="theme-mini-label">Light</span>
+                                <span className="theme-mini-dot" />
+                              </div>
+                              <div className="theme-mini-search-bar" />
+                              <div className="theme-mini-tabs">
+                                <span className="theme-mini-pill theme-mini-pill-accent" />
+                                <span className="theme-mini-pill" />
+                              </div>
+                              <div className="theme-mini-list">
+                                <span className="theme-mini-line" />
+                                <span className="theme-mini-line theme-mini-line-short" />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="theme-card-body">
+                            <div className="theme-card-copy">
+                              <strong>{preset.label}</strong>
+                              <span>{preset.description}</span>
+                            </div>
+                            <span className="theme-card-tag">
+                              {isActive ? "Selected" : "Apply"}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <p className="advanced-note">
+                    {`Current preset: ${activeThemePreset.label}. Use the header toggle anytime to switch between its dark and light versions.`}
+                  </p>
                 </div>
-                <p className="advanced-note">
-                  {`Current default: ${defaultSearchLimit.toLocaleString()} | Current active limit: ${searchLimit.toLocaleString()}`}
-                </p>
-                <p className="advanced-note">Load more uses this same amount each click.</p>
-                {settingsError ? <p className="advanced-error">{settingsError}</p> : null}
-                {settingsMessage ? <p className="advanced-success">{settingsMessage}</p> : null}
+
+                <div className="advanced-settings-section">
+                  <label htmlFor="search-limit-input">
+                    Results per search (range {SEARCH_LIMIT_MIN} - {SEARCH_LIMIT_MAX})
+                  </label>
+                  <NumberInputField
+                    id="search-limit-input"
+                    min={SEARCH_LIMIT_MIN}
+                    max={SEARCH_LIMIT_MAX}
+                    step={50}
+                    value={searchLimitInput}
+                    ariaLabel="Results per search"
+                    onChange={(value) => {
+                      setSearchLimitInput(value);
+                      if (settingsError) {
+                        setSettingsError(null);
+                      }
+                      if (settingsMessage) {
+                        setSettingsMessage(null);
+                      }
+                    }}
+                  />
+                  <div className="advanced-settings-actions">
+                    <button type="button" className="ghost-button" onClick={applySearchLimitPreference}>
+                      Update
+                    </button>
+                    <button type="button" className="ghost-button" onClick={resetSearchLimitPreference}>
+                      Reset default ({SEARCH_LIMIT})
+                    </button>
+                  </div>
+                  <p className="advanced-note">
+                    {`Current default: ${defaultSearchLimit.toLocaleString()} | Current active limit: ${searchLimit.toLocaleString()}`}
+                  </p>
+                  <p className="advanced-note">Load more uses this same amount each click.</p>
+                  {settingsError ? <p className="advanced-error">{settingsError}</p> : null}
+                  {settingsMessage ? <p className="advanced-success">{settingsMessage}</p> : null}
+                </div>
               </div>
             </div>
           </section>

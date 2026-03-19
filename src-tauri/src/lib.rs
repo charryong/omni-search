@@ -183,7 +183,7 @@ fn index_status() -> IndexStatus {
 }
 
 #[tauri::command]
-fn search_files(
+async fn search_files(
     query: String,
     extension: Option<String>,
     min_size: Option<u64>,
@@ -194,40 +194,44 @@ fn search_files(
 ) -> Result<Vec<SearchResult>, String> {
     #[cfg(target_os = "windows")]
     {
-        let c_query = CString::new(query).map_err(|_| "Invalid query".to_string())?;
-        let c_extension =
-            CString::new(extension.unwrap_or_default()).map_err(|_| "Invalid extension".to_string())?;
+        tauri::async_runtime::spawn_blocking(move || -> Result<Vec<SearchResult>, String> {
+            let c_query = CString::new(query).map_err(|_| "Invalid query".to_string())?;
+            let c_extension = CString::new(extension.unwrap_or_default())
+                .map_err(|_| "Invalid extension".to_string())?;
 
-        let min_size = min_size.unwrap_or(0);
-        let max_size = max_size.unwrap_or(u64::MAX);
-        let min_created_unix = min_created_unix.unwrap_or(i64::MIN);
-        let max_created_unix = max_created_unix.unwrap_or(i64::MAX);
-        let limit = limit.unwrap_or(200).clamp(1, 5_000);
+            let min_size = min_size.unwrap_or(0);
+            let max_size = max_size.unwrap_or(u64::MAX);
+            let min_created_unix = min_created_unix.unwrap_or(i64::MIN);
+            let max_created_unix = max_created_unix.unwrap_or(i64::MAX);
+            let limit = limit.unwrap_or(200).clamp(1, 5_000);
 
-        // SAFETY: Inputs are valid null-terminated strings and primitive values.
-        let raw_json = unsafe {
-            omni_search_files_json(
-                c_query.as_ptr(),
-                c_extension.as_ptr(),
-                min_size,
-                max_size,
-                min_created_unix,
-                max_created_unix,
-                limit,
-            )
-        };
-        if raw_json.is_null() {
-            return Err(read_last_error().unwrap_or_else(|| "Search failed".to_string()));
-        }
+            // SAFETY: Inputs are valid null-terminated strings and primitive values.
+            let raw_json = unsafe {
+                omni_search_files_json(
+                    c_query.as_ptr(),
+                    c_extension.as_ptr(),
+                    min_size,
+                    max_size,
+                    min_created_unix,
+                    max_created_unix,
+                    limit,
+                )
+            };
+            if raw_json.is_null() {
+                return Err(read_last_error().unwrap_or_else(|| "Search failed".to_string()));
+            }
 
-        // SAFETY: `raw_json` points to a C string allocated by C++.
-        let json = unsafe { CStr::from_ptr(raw_json).to_string_lossy().to_string() };
-        // SAFETY: `raw_json` was allocated by C++ and must be released by C++.
-        unsafe { omni_free_string(raw_json) };
+            // SAFETY: `raw_json` points to a C string allocated by C++.
+            let json = unsafe { CStr::from_ptr(raw_json).to_string_lossy().to_string() };
+            // SAFETY: `raw_json` was allocated by C++ and must be released by C++.
+            unsafe { omni_free_string(raw_json) };
 
-        let parsed: Vec<SearchResult> =
-            serde_json::from_str(&json).map_err(|err| format!("Invalid search payload: {err}"))?;
-        Ok(parsed)
+            let parsed: Vec<SearchResult> = serde_json::from_str(&json)
+                .map_err(|err| format!("Invalid search payload: {err}"))?;
+            Ok(parsed)
+        })
+        .await
+        .map_err(|err| format!("Search task failed: {err}"))?
     }
 
     #[cfg(not(target_os = "windows"))]

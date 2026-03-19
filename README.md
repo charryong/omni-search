@@ -9,7 +9,7 @@ OmniSearch indexes NTFS metadata directly through USN/MFT APIs for fast global s
 
 <p align="center"><strong>Search Experience</strong></p>
 <p align="center">
-  <img src="docs/images/image.png" width="88%" alt="OmniSearch Screenshot">
+  <img src="docs/images/A1.png" width="88%" alt="OmniSearch Screenshot">
 </p>
 <p align="center"><em>Main search tab with filters, categories, previews, and actions.</em></p>
 <p align="center"><sub>──────────── · ────────────</sub></p>
@@ -17,7 +17,7 @@ OmniSearch indexes NTFS metadata directly through USN/MFT APIs for fast global s
 
 <p align="center"><strong>Duplicate Finder</strong></p>
 <p align="center">
-  <img src="docs/images/duplicates.png" width="84%" alt="OmniSearch Duplicate Finder Screenshot">
+  <img src="docs/images/A2.png" width="84%" alt="OmniSearch Duplicate Finder Screenshot">
 </p>
 <p align="center"><em>Duplicate Finder groups identical files, shows reclaimable space, and supports progress + cancel.</em></p>
 <p align="center"><sub>──────────── · ────────────</sub></p>
@@ -25,9 +25,9 @@ OmniSearch indexes NTFS metadata directly through USN/MFT APIs for fast global s
 
 <p align="center"><strong>Drive Scope & Advanced Settings</strong></p>
 <p align="center">
-  <img src="docs/images/all-drives.png" width="84%" alt="OmniSearch Drive Scope and Advanced Settings Screenshot">
+  <img src="docs/images/A3.png" width="84%" alt="OmniSearch Drive Scope and Advanced Settings Screenshot">
 </p>
-<p align="center"><em>Optional all-drives indexing, include-folders toggle, and advanced result-limit controls.</em></p>
+<p align="center"><em>Optional all-drives indexing, include-folders toggle, and theme selection.</em></p>
 
 <p align="center">
   <img src="docs/images/omnisearch-architecture.svg" width="92%" alt="OmniSearch Architecture">
