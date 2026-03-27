@@ -769,6 +769,7 @@ pub fn run() {
             desktop::get_desktop_settings,
             desktop::open_full_window_command,
             desktop::open_quick_window_command,
+            desktop::reset_window_layout_command,
             desktop::sync_window_theme_command,
             desktop::update_desktop_settings
         ])

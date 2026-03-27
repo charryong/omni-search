@@ -14,6 +14,7 @@ import {
   listenForWindowMode,
   openFullWindow,
   openQuickWindow,
+  resetWindowLayout,
   syncNativeWindowTheme,
   updateDesktopSettings,
 } from "./desktop";
@@ -1158,6 +1159,7 @@ function NumberInputField({
         ref={inputRef}
         id={id}
         type="number"
+        autoComplete="off"
         min={min}
         max={max}
         step={step}
@@ -1699,6 +1701,7 @@ function App() {
     useState<DesktopSettings>(DEFAULT_DESKTOP_SETTINGS);
   const [desktopSettingsLoading, setDesktopSettingsLoading] = useState(true);
   const [desktopSettingsSaving, setDesktopSettingsSaving] = useState(false);
+  const [desktopLayoutResetting, setDesktopLayoutResetting] = useState(false);
   const [desktopSettingsError, setDesktopSettingsError] = useState<string | null>(null);
   const [desktopSettingsMessage, setDesktopSettingsMessage] = useState<string | null>(null);
   const [selectedResultKey, setSelectedResultKey] = useState<string | null>(null);
@@ -1725,11 +1728,26 @@ function App() {
   const currentShortcutLabel = desktopSettings.shortcutEnabled
     ? `Hotkey: ${formattedDesktopShortcut}`
     : "Hotkey off";
+  const searchLimitInputTrimmed = searchLimitInput.trim();
+  const savedSearchLimitInput = String(defaultSearchLimit);
+  const parsedSearchLimitInput = Number(searchLimitInputTrimmed);
+  const pendingSearchLimit =
+    searchLimitInputTrimmed.length > 0 &&
+    Number.isFinite(parsedSearchLimitInput) &&
+    parsedSearchLimitInput > 0
+      ? normalizeSearchLimit(parsedSearchLimitInput)
+      : null;
+  const searchLimitValueNeedsNormalization =
+    pendingSearchLimit !== null && searchLimitInputTrimmed !== String(pendingSearchLimit);
+  const searchLimitHasPendingChanges = searchLimitInputTrimmed !== savedSearchLimitInput;
+  const searchLimitCanResetToDefault =
+    defaultSearchLimit !== SEARCH_LIMIT || searchLimitInputTrimmed !== String(SEARCH_LIMIT);
   const quickIndexScopeLabel = includeAllDrives ? "Index: all drives" : `Index: ${selectedDrive}:`;
   const desktopSettingsDirty =
     desktopSettings.backgroundModeEnabled !== desktopSettingsDraft.backgroundModeEnabled ||
     desktopSettings.shortcutEnabled !== desktopSettingsDraft.shortcutEnabled ||
-    desktopSettings.shortcut.trim() !== desktopSettingsDraft.shortcut.trim();
+    desktopSettings.shortcut.trim() !== desktopSettingsDraft.shortcut.trim() ||
+    desktopSettings.rememberWindowBounds !== desktopSettingsDraft.rememberWindowBounds;
 
   const hasFilters =
     extension.trim().length > 0 ||
@@ -2547,6 +2565,7 @@ function App() {
     const nextSettings: DesktopSettings = {
       backgroundModeEnabled: desktopSettingsDraft.backgroundModeEnabled,
       shortcutEnabled: desktopSettingsDraft.shortcutEnabled,
+      rememberWindowBounds: desktopSettingsDraft.rememberWindowBounds,
       shortcut: normalizedShortcut,
     };
 
@@ -2567,6 +2586,25 @@ function App() {
       setDesktopSettingsError(`Failed to save desktop settings: ${String(error)}`);
     } finally {
       setDesktopSettingsSaving(false);
+    }
+  }
+
+  async function resetDesktopWindowLayout(): Promise<void> {
+    setDesktopLayoutResetting(true);
+    setDesktopSettingsError(null);
+    setDesktopSettingsMessage(null);
+
+    try {
+      await resetWindowLayout();
+      setDesktopSettingsMessage(
+        desktopSettingsDraft.rememberWindowBounds
+          ? "Reset. Full workspace layout returned to its default size and position."
+          : "Reset. The saved full workspace layout was cleared.",
+      );
+    } catch (error) {
+      setDesktopSettingsError(`Failed to reset the window layout: ${String(error)}`);
+    } finally {
+      setDesktopLayoutResetting(false);
     }
   }
 
@@ -3099,7 +3137,12 @@ function App() {
     : undefined;
 
   return (
-    <div className={`app-shell ${isQuickMode ? "quick-window-mode" : ""}`}>
+    <div
+      className={`app-shell ${isQuickMode ? "quick-window-mode" : ""}`}
+      onContextMenu={(event) => {
+        event.preventDefault();
+      }}
+    >
       <main className={`spotlight-panel ${isQuickMode ? "spotlight-panel-quick" : ""}`}>
         <header className={`panel-header ${isQuickMode ? "quick-panel-header" : ""}`}>
           <div className="panel-title-block">
@@ -3292,10 +3335,30 @@ function App() {
                 className={`search-input ${isQuickMode ? "quick-search-input" : ""}`}
                 type="text"
                 value={query}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 onChange={(event) => setQuery(event.currentTarget.value)}
                 placeholder="Type to search across indexed items..."
                 autoFocus
               />
+              {query.length > 0 ? (
+                <button
+                  type="button"
+                  className="search-input-clear"
+                  aria-label="Clear search"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                  }}
+                  onClick={() => {
+                    setQuery("");
+                    searchInputRef.current?.focus();
+                  }}
+                >
+                  <span aria-hidden="true">x</span>
+                </button>
+              ) : null}
             </div>
 
             <section className={`filter-grid ${isQuickMode ? "quick-filter-grid" : ""}`}>
@@ -3304,6 +3367,10 @@ function App() {
                 <input
                   type="text"
                   value={extension}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   onChange={(event) => setExtension(event.currentTarget.value)}
                   placeholder=".mp4 or folder"
                 />
@@ -3337,6 +3404,7 @@ function App() {
                     ref={createdAfterInputRef}
                     type="date"
                     value={createdAfter}
+                    autoComplete="off"
                     onChange={(event) => setCreatedAfter(event.currentTarget.value)}
                   />
                   <button
@@ -3358,6 +3426,7 @@ function App() {
                     ref={createdBeforeInputRef}
                     type="date"
                     value={createdBefore}
+                    autoComplete="off"
                     onChange={(event) => setCreatedBefore(event.currentTarget.value)}
                   />
                   <button
@@ -3415,7 +3484,7 @@ function App() {
                     <span>Show previews</span>
                   </label>
                   <label className="sort-picker" htmlFor="result-sort">
-                    <span>Sort</span>
+                    <span className="sort-picker-label">Sort</span>
                     <select
                       id="result-sort"
                       value={resultSort}
@@ -3785,15 +3854,6 @@ function App() {
 
         {activeTab === "duplicates" ? (
           <section className="tab-panel" aria-label="Find duplicate files">
-            <div className="status-row">
-              <span
-                className={`status-dot ${
-                  status.indexing || indexSyncing ? "live" : status.ready ? "ready" : "idle"
-                }`}
-              />
-              <span>{statusText}</span>
-            </div>
-
             {visibleStatusError ? <p className="error-row">{visibleStatusError}</p> : null}
             {driveError ? <p className="error-row">{driveError}</p> : null}
 
@@ -4224,14 +4284,54 @@ function App() {
                       </span>
                     </button>
 
+                    <button
+                      type="button"
+                      className={`settings-switch-card settings-switch-card-button ${
+                        desktopSettingsDraft.rememberWindowBounds ? "is-active" : ""
+                      }`}
+                      role="switch"
+                      aria-checked={desktopSettingsDraft.rememberWindowBounds}
+                      disabled={
+                        desktopSettingsSaving || desktopSettingsLoading || desktopLayoutResetting
+                      }
+                      onClick={() => {
+                        setDesktopSettingsDraft((previous) => ({
+                          ...previous,
+                          rememberWindowBounds: !previous.rememberWindowBounds,
+                        }));
+                        setDesktopSettingsError(null);
+                        setDesktopSettingsMessage(null);
+                      }}
+                    >
+                      <div className="settings-switch-copy">
+                        <strong>Remember full window size and position</strong>
+                        <span>
+                          Reopen the full workspace where you last left it. Quick Window keeps its
+                          fixed launcher-style layout.
+                        </span>
+                      </div>
+                      <span
+                        className={`scan-switch settings-switch-toggle settings-switch-toggle-button ${
+                          desktopSettingsDraft.rememberWindowBounds ? "is-on" : ""
+                        }`}
+                        aria-hidden="true"
+                      >
+                        <span className="scan-switch-slider" aria-hidden="true" />
+                        <span>{desktopSettingsDraft.rememberWindowBounds ? "On" : "Off"}</span>
+                      </span>
+                    </button>
+
                     <label className="desktop-shortcut-field" htmlFor="desktop-shortcut-input">
                       <span>Shortcut</span>
                       <input
                         id="desktop-shortcut-input"
                         type="text"
                         value={desktopSettingsDraft.shortcut}
-                        disabled={desktopSettingsSaving || desktopSettingsLoading}
+                        disabled={
+                          desktopSettingsSaving || desktopSettingsLoading || desktopLayoutResetting
+                        }
                         placeholder={DEFAULT_DESKTOP_SETTINGS.shortcut}
+                        autoComplete="off"
                         autoCapitalize="none"
                         autoCorrect="off"
                         spellCheck={false}
@@ -4254,9 +4354,12 @@ function App() {
                     <div className="advanced-settings-actions">
                       <button
                         type="button"
-                        className="ghost-button"
+                        className={`ghost-button ${desktopSettingsDirty ? "is-pending" : ""}`}
                         disabled={
-                          desktopSettingsSaving || desktopSettingsLoading || !desktopSettingsDirty
+                          desktopSettingsSaving ||
+                          desktopSettingsLoading ||
+                          desktopLayoutResetting ||
+                          !desktopSettingsDirty
                         }
                         onClick={() => {
                           void saveDesktopBehaviorSettings();
@@ -4266,9 +4369,12 @@ function App() {
                       </button>
                       <button
                         type="button"
-                        className="ghost-button"
+                        className={`ghost-button ${desktopSettingsDirty ? "is-pending" : ""}`}
                         disabled={
-                          desktopSettingsSaving || desktopSettingsLoading || !desktopSettingsDirty
+                          desktopSettingsSaving ||
+                          desktopSettingsLoading ||
+                          desktopLayoutResetting ||
+                          !desktopSettingsDirty
                         }
                         onClick={() => {
                           setDesktopSettingsDraft(desktopSettings);
@@ -4278,12 +4384,30 @@ function App() {
                       >
                         Reset changes
                       </button>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        disabled={
+                          desktopSettingsSaving || desktopSettingsLoading || desktopLayoutResetting
+                        }
+                        onClick={() => {
+                          void resetDesktopWindowLayout();
+                        }}
+                      >
+                        {desktopLayoutResetting ? "Resetting layout..." : "Reset window layout"}
+                      </button>
                     </div>
+                    {desktopSettingsDirty ? (
+                      <p className="advanced-pending">
+                        Pending desktop setting changes. Click Save desktop settings to apply them.
+                      </p>
+                    ) : null}
                   </div>
 
                   <p className="advanced-note">
                     Tray menu includes Open Quick Window, Open Main App, Hide, and Quit. Shortcut
-                    changes apply immediately after saving.
+                    changes apply immediately after saving. Quick Window always keeps its fixed
+                    launcher layout.
                   </p>
                   {desktopSettingsLoading ? (
                     <p className="advanced-note">Loading desktop settings...</p>
@@ -4318,13 +4442,32 @@ function App() {
                     }}
                   />
                   <div className="advanced-settings-actions">
-                    <button type="button" className="ghost-button" onClick={applySearchLimitPreference}>
-                      Update
+                    <button
+                      type="button"
+                      className={`ghost-button ${searchLimitHasPendingChanges ? "is-pending" : ""}`}
+                      disabled={!searchLimitHasPendingChanges}
+                      onClick={applySearchLimitPreference}
+                    >
+                      {searchLimitHasPendingChanges ? "Apply update" : "Updated"}
                     </button>
-                    <button type="button" className="ghost-button" onClick={resetSearchLimitPreference}>
+                    <button
+                      type="button"
+                      className={`ghost-button ${searchLimitCanResetToDefault ? "is-pending" : ""}`}
+                      disabled={!searchLimitCanResetToDefault}
+                      onClick={resetSearchLimitPreference}
+                    >
                       Reset default ({SEARCH_LIMIT})
                     </button>
                   </div>
+                  {searchLimitHasPendingChanges ? (
+                    <p className="advanced-pending">
+                      {pendingSearchLimit === null
+                        ? "Pending update. Enter a valid number, then click Apply update."
+                        : searchLimitValueNeedsNormalization
+                          ? `Pending update. Click Apply update to normalize this value to ${pendingSearchLimit.toLocaleString()}.`
+                          : `Pending update. Click Apply update to use ${pendingSearchLimit.toLocaleString()} results by default.`}
+                    </p>
+                  ) : null}
                   <p className="advanced-note">
                     {`Current default: ${defaultSearchLimit.toLocaleString()} | Current active limit: ${searchLimit.toLocaleString()}`}
                   </p>
@@ -4649,6 +4792,10 @@ function App() {
                   ref={searchResultRenameInputRef}
                   type="text"
                   value={searchResultRenameDraft.nextName}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   disabled={searchResultRenameBusy}
                   onChange={(event) => {
                     const { value } = event.currentTarget;

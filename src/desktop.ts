@@ -5,6 +5,7 @@ export type DesktopSettings = {
   backgroundModeEnabled: boolean;
   shortcutEnabled: boolean;
   shortcut: string;
+  rememberWindowBounds: boolean;
 };
 
 export type WindowMode = "full" | "quick";
@@ -17,6 +18,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   backgroundModeEnabled: true,
   shortcutEnabled: true,
   shortcut: "Alt+Shift+S",
+  rememberWindowBounds: true,
 };
 
 const WINDOW_MODE_EVENT = "omni-search://window-mode";
@@ -28,6 +30,10 @@ function normalizeDesktopSettings(
     backgroundModeEnabled: Boolean(settings?.backgroundModeEnabled),
     shortcutEnabled: Boolean(settings?.shortcutEnabled),
     shortcut: settings?.shortcut?.trim() || DEFAULT_DESKTOP_SETTINGS.shortcut,
+    rememberWindowBounds:
+      typeof settings?.rememberWindowBounds === "boolean"
+        ? settings.rememberWindowBounds
+        : DEFAULT_DESKTOP_SETTINGS.rememberWindowBounds,
   };
 }
 
@@ -44,9 +50,15 @@ export async function updateDesktopSettings(
     background_mode_enabled: settings.backgroundModeEnabled,
     shortcutEnabled: settings.shortcutEnabled,
     shortcut_enabled: settings.shortcutEnabled,
+    rememberWindowBounds: settings.rememberWindowBounds,
+    remember_window_bounds: settings.rememberWindowBounds,
     shortcut: settings.shortcut,
   });
   return normalizeDesktopSettings(saved);
+}
+
+export async function resetWindowLayout(): Promise<void> {
+  await invoke("reset_window_layout_command");
 }
 
 export async function openFullWindow(): Promise<void> {
