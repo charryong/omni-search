@@ -7,6 +7,7 @@ import type {
 } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { flushSync } from "react-dom";
 import "./App.css";
 import {
   DEFAULT_DESKTOP_SETTINGS,
@@ -121,9 +122,19 @@ type DeveloperApp = {
   name: string;
   url: string;
   blurb: string;
-  icon: "clipboard" | "workspace" | "capture";
+  iconSrc: string;
   accent: "sky" | "mint" | "amber";
 };
+type RecentActivityQueryEntry = {
+  kind: "query";
+  query: string;
+  usedAt: number;
+};
+type RecentActivityItemEntry = SearchResult & {
+  kind: "item";
+  usedAt: number;
+};
+type RecentActivityEntry = RecentActivityQueryEntry | RecentActivityItemEntry;
 
 type ActiveTab = "search" | "duplicates" | "advanced" | "themes" | "about";
 type ResultViewTab = "all" | "apps" | "media" | "docs" | "archives";
@@ -173,6 +184,9 @@ const PREVIEW_STORAGE_KEY = "omnisearch_show_previews";
 const INCLUDE_FOLDERS_STORAGE_KEY = "omnisearch_include_folders";
 const INCLUDE_ALL_DRIVES_STORAGE_KEY = "omnisearch_include_all_drives";
 const SEARCH_LIMIT_STORAGE_KEY = "omnisearch_search_limit";
+const RECENT_ACTIVITY_STORAGE_KEY = "omnisearch_recent_activity";
+const RECENT_ACTIVITY_ENABLED_STORAGE_KEY = "omnisearch_recent_activity_enabled";
+const RECENT_ACTIVITY_LIMIT = 5;
 const THEME_PRESETS: ThemePreset[] = [
   {
     id: "aurora",
@@ -942,21 +956,21 @@ const MORE_APPS: DeveloperApp[] = [
     url: "https://apps.microsoft.com/detail/9N53Z3QVL322?hl=en-us&gl=US&ocid=pdpshare",
     blurb:
       "A lightweight, searchable clipboard manager with persistent SQLite storage and global shortcuts.",
-    icon: "clipboard",
+    iconSrc: "/omniclip_icon.png",
     accent: "sky",
   },
   {
     name: "EyuX AI - Workspace",
     url: "https://apps.microsoft.com/detail/9NX5DBW6NHW1?hl=en-us&gl=US&ocid=pdpshare",
     blurb: "An AI workspace focused on practical desktop productivity.",
-    icon: "workspace",
+    iconSrc: "/Eyux_icon.png",
     accent: "mint",
   },
   {
     name: "ZenCapture",
     url: "https://apps.microsoft.com/detail/9NVW8TKD5R33?hl=en-us&gl=US&ocid=pdpshare",
     blurb: "A lightweight capture tool for daily ideas with screenshots.",
-    icon: "capture",
+    iconSrc: "/zencapture_icon.png",
     accent: "amber",
   },
 ];
@@ -1008,40 +1022,6 @@ function MicrosoftStoreIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M3 4.3 10.5 3v8H3V4.3Zm10.5-1.55L21 1.5V11h-7.5V2.75ZM3 13h7.5v8L3 19.7V13Zm10.5 0H21v9.5L13.5 21v-8Z" />
-    </svg>
-  );
-}
-
-function DeveloperAppIcon({
-  icon,
-}: {
-  icon: DeveloperApp["icon"];
-}) {
-  if (icon === "clipboard") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M9 5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5v1H9v-1Z" />
-        <path d="M8 6.5h8A2.5 2.5 0 0 1 18.5 9v9A2.5 2.5 0 0 1 16 20.5H8A2.5 2.5 0 0 1 5.5 18V9A2.5 2.5 0 0 1 8 6.5Z" />
-        <path d="M9 11.25h6M9 15.25h4.5" />
-      </svg>
-    );
-  }
-
-  if (icon === "workspace") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4.5 6.5h15v11h-15z" />
-        <path d="M4.5 10.5h15M10 6.5v11" />
-        <path d="m16.75 3.1.62 1.68 1.68.62-1.68.62-.62 1.68-.62-1.68-1.68-.62 1.68-.62.62-1.68Z" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M8 5.5H6.5A1.5 1.5 0 0 0 5 7v1.5M16 5.5h1.5A1.5 1.5 0 0 1 19 7v1.5M8 18.5H6.5A1.5 1.5 0 0 1 5 17v-1.5M16 18.5h1.5A1.5 1.5 0 0 0 19 17v-1.5" />
-      <circle cx="12" cy="12" r="3.2" />
-      <path d="M16.9 8.1h.01" />
     </svg>
   );
 }
@@ -1440,6 +1420,75 @@ function previewSourcesFromPath(path: string): string[] {
   return [...new Set(candidates)];
 }
 
+function recentActivityEntryKey(entry: RecentActivityEntry): string {
+  return entry.kind === "query"
+    ? `query:${entry.query.trim().toLowerCase()}`
+    : `item:${stripInvisibleText(entry.path).trim().toLowerCase()}`;
+}
+
+function normalizeRecentActivityEntries(value: unknown): RecentActivityEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized: RecentActivityEntry[] = [];
+
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const entry = candidate as Record<string, unknown>;
+    const rawUsedAt = Number(entry.usedAt);
+    const usedAt = Number.isFinite(rawUsedAt) && rawUsedAt > 0 ? rawUsedAt : Date.now();
+
+    if (entry.kind === "query") {
+      const query = typeof entry.query === "string" ? stripInvisibleText(entry.query).trim() : "";
+      if (query.length === 0) {
+        continue;
+      }
+      normalized.push({
+        kind: "query",
+        query,
+        usedAt,
+      });
+      continue;
+    }
+
+    if (entry.kind !== "item") {
+      continue;
+    }
+
+    const name = typeof entry.name === "string" ? stripInvisibleText(entry.name).trim() : "";
+    const path = typeof entry.path === "string" ? stripInvisibleText(entry.path).trim() : "";
+    if (name.length === 0 || path.length === 0) {
+      continue;
+    }
+
+    normalized.push({
+      kind: "item",
+      name,
+      path,
+      extension: typeof entry.extension === "string" ? entry.extension : "",
+      size: Number.isFinite(Number(entry.size)) ? Number(entry.size) : 0,
+      createdUnix: Number.isFinite(Number(entry.createdUnix)) ? Number(entry.createdUnix) : 0,
+      modifiedUnix: Number.isFinite(Number(entry.modifiedUnix)) ? Number(entry.modifiedUnix) : 0,
+      isDirectory: Boolean(entry.isDirectory),
+      usedAt,
+    });
+  }
+
+  const deduped = new Map<string, RecentActivityEntry>();
+  for (const entry of normalized.sort((left, right) => right.usedAt - left.usedAt)) {
+    const key = recentActivityEntryKey(entry);
+    if (!deduped.has(key)) {
+      deduped.set(key, entry);
+    }
+  }
+
+  return Array.from(deduped.values()).slice(0, RECENT_ACTIVITY_LIMIT);
+}
+
 function relevanceScore(result: SearchResult, queryValue: string): number {
   const query = queryValue.trim().toLowerCase();
   if (!query) {
@@ -1689,6 +1738,26 @@ function App() {
     const saved = Number(savedRaw);
     return normalizeSearchLimit(saved);
   });
+  const [recentActivityEnabled, setRecentActivityEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") {
+      return true;
+    }
+    return window.localStorage.getItem(RECENT_ACTIVITY_ENABLED_STORAGE_KEY) !== "0";
+  });
+  const [recentActivity, setRecentActivity] = useState<RecentActivityEntry[]>(() => {
+    if (typeof window === "undefined") {
+      return [];
+    }
+    try {
+      const saved = window.localStorage.getItem(RECENT_ACTIVITY_STORAGE_KEY);
+      if (!saved) {
+        return [];
+      }
+      return normalizeRecentActivityEntries(JSON.parse(saved));
+    } catch {
+      return [];
+    }
+  });
   const [searchLimit, setSearchLimit] = useState<number>(defaultSearchLimit);
   const [searchLimitInput, setSearchLimitInput] = useState<string>(() =>
     String(defaultSearchLimit),
@@ -1720,6 +1789,7 @@ function App() {
   const createdBeforeInputRef = useRef<HTMLInputElement | null>(null);
   const searchResultContextMenuRef = useRef<HTMLDivElement | null>(null);
   const searchResultRenameInputRef = useRef<HTMLInputElement | null>(null);
+  const previousSearchQueryRef = useRef("");
   const activeThemePreset = themePresetById(themePreset);
   const isQuickMode = windowMode === "quick";
   const formattedDesktopShortcut = formatShortcutLabel(
@@ -2019,8 +2089,45 @@ function App() {
   }, [defaultSearchLimit]);
 
   useEffect(() => {
+    window.localStorage.setItem(
+      RECENT_ACTIVITY_ENABLED_STORAGE_KEY,
+      recentActivityEnabled ? "1" : "0",
+    );
+  }, [recentActivityEnabled]);
+
+  useEffect(() => {
+    window.localStorage.setItem(RECENT_ACTIVITY_STORAGE_KEY, JSON.stringify(recentActivity));
+  }, [recentActivity]);
+
+  useEffect(() => {
     setSearchLimitInput(String(defaultSearchLimit));
   }, [defaultSearchLimit]);
+
+  useEffect(() => {
+    const previousQuery = previousSearchQueryRef.current;
+    if (
+      activeTab === "search" &&
+      recentActivityEnabled &&
+      previousQuery.length > 0 &&
+      trimmedQuery.length === 0
+    ) {
+      setRecentActivity((previous) => {
+        const nextEntry: RecentActivityQueryEntry = {
+          kind: "query",
+          query: previousQuery,
+          usedAt: Date.now(),
+        };
+        const next = [
+          nextEntry,
+          ...previous.filter(
+            (entry) => recentActivityEntryKey(entry) !== recentActivityEntryKey(nextEntry),
+          ),
+        ];
+        return next.slice(0, RECENT_ACTIVITY_LIMIT);
+      });
+    }
+    previousSearchQueryRef.current = trimmedQuery;
+  }, [activeTab, isQuickMode, recentActivityEnabled, trimmedQuery]);
 
   useEffect(() => {
     if (visibleResults.length === 0) {
@@ -2960,9 +3067,66 @@ function App() {
     }
   }
 
-  async function openResult(path: string): Promise<void> {
+  function removeRecentActivityEntry(entryKey: string): void {
+    setRecentActivity((previous) =>
+      previous.filter((entry) => recentActivityEntryKey(entry) !== entryKey),
+    );
+  }
+
+  function recordRecentResult(result: SearchResult): void {
+    if (!recentActivityEnabled) {
+      return;
+    }
+
+    setRecentActivity((previous) => {
+      const nextEntry: RecentActivityItemEntry = {
+        kind: "item",
+        ...result,
+        usedAt: Date.now(),
+      };
+      const next = [
+        nextEntry,
+        ...previous.filter(
+          (entry) => recentActivityEntryKey(entry) !== recentActivityEntryKey(nextEntry),
+        ),
+      ];
+      return next.slice(0, RECENT_ACTIVITY_LIMIT);
+    });
+  }
+
+  function reopenRecentQuery(queryValue: string): void {
+    flushSync(() => {
+      setQuery(queryValue);
+    });
+    window.requestAnimationFrame(() => {
+      const input = searchInputRef.current;
+      if (!input) {
+        return;
+      }
+      input.focus();
+      const caretPosition = input.value.length;
+      try {
+        input.setSelectionRange(caretPosition, caretPosition);
+      } catch {
+        // Ignore selection failures on unsupported input states.
+      }
+    });
+  }
+
+  async function openResult(path: string, sourceResult?: SearchResult): Promise<void> {
     try {
       await invoke("open_file", { path });
+      if (recentActivityEnabled) {
+        const matchedResult =
+          sourceResult ??
+          results.find(
+            (result) =>
+              stripInvisibleText(result.path).trim() === stripInvisibleText(path).trim(),
+          );
+        if (matchedResult) {
+          recordRecentResult(matchedResult);
+        }
+      }
       setActionError(null);
     } catch (error) {
       setActionError(`Failed to open file: ${String(error)}`);
@@ -3064,6 +3228,13 @@ function App() {
     results.length > 0 &&
     results.length >= searchLimit &&
     searchLimit < SEARCH_LIMIT_MAX;
+  const visibleRecentActivity = recentActivity.slice(0, RECENT_ACTIVITY_LIMIT);
+  const showRecentActivity =
+    !isQuickMode &&
+    activeTab === "search" &&
+    recentActivityEnabled &&
+    trimmedQuery.length === 0 &&
+    !hasFilters;
   const selectedResultRowKey = selectedResult ? rowKeyForResult(selectedResult) : "";
   const selectedResultIsDirectory = selectedResult?.isDirectory ?? false;
   const selectedResultExtension = selectedResult ? normalizedExtension(selectedResult) : "";
@@ -3136,6 +3307,93 @@ function App() {
       } as CSSProperties)
     : undefined;
 
+  function renderRecentActivityCard(entry: RecentActivityEntry): ReactNode {
+    const entryKey = recentActivityEntryKey(entry);
+    const isQueryEntry = entry.kind === "query";
+    const previewKind = !isQueryEntry && showPreviews ? previewKindFromResult(entry) : "none";
+    const previewSources =
+      !isQueryEntry && (previewKind === "image" || previewKind === "video")
+        ? previewSourcesFromPath(entry.path).filter(
+            (source, index, all) => source.length > 0 && all.indexOf(source) === index,
+          )
+        : [];
+    const previewSrc = previewSources[0] ?? "";
+    const shortType = isQueryEntry
+      ? "Q"
+      : entry.isDirectory
+        ? "DIR"
+        : (normalizedExtension(entry) || "file").slice(0, 2).toUpperCase();
+
+    const activateCard = () => {
+      if (isQueryEntry) {
+        reopenRecentQuery(entry.query);
+        return;
+      }
+      void openResult(entry.path, entry);
+    };
+
+    return (
+      <article
+        key={entryKey}
+        className={`recent-activity-card ${isQueryEntry ? "is-query" : "is-item"}`}
+        role="button"
+        tabIndex={0}
+        onClick={activateCard}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            activateCard();
+          }
+        }}
+      >
+        <div
+          className={`result-preview recent-activity-preview ${isQueryEntry ? "query" : previewKind} ${
+            !isQueryEntry && entry.isDirectory ? "folder" : ""
+          }`}
+          aria-hidden="true"
+        >
+          {!isQueryEntry ? <span className="preview-fallback">{shortType}</span> : null}
+          {isQueryEntry ? (
+            <span className="recent-activity-query-icon">
+              <SearchLensIcon />
+            </span>
+          ) : previewSrc.length > 0 && previewKind === "image" ? (
+            <img className="preview-media ready" src={previewSrc} alt="" loading="lazy" />
+          ) : previewSrc.length > 0 && previewKind === "video" ? (
+            <video
+              className="preview-media ready"
+              src={previewSrc}
+              muted
+              playsInline
+              preload="metadata"
+            />
+          ) : null}
+        </div>
+
+        <div className="recent-activity-copy">
+          <strong>{isQueryEntry ? entry.query : entry.name}</strong>
+          {!isQueryEntry ? <span>{entry.path}</span> : null}
+        </div>
+
+        <button
+          type="button"
+          className="recent-activity-remove"
+          aria-label={
+            isQueryEntry
+              ? `Remove recent search ${entry.query}`
+              : `Remove recent item ${entry.name}`
+          }
+          onClick={(event) => {
+            event.stopPropagation();
+            removeRecentActivityEntry(entryKey);
+          }}
+        >
+          <span aria-hidden="true">x</span>
+        </button>
+      </article>
+    );
+  }
+
   return (
     <div
       className={`app-shell ${isQuickMode ? "quick-window-mode" : ""}`}
@@ -3143,6 +3401,10 @@ function App() {
         event.preventDefault();
       }}
     >
+      <div className="app-background" aria-hidden="true">
+        <div className="app-background-base" />
+        <div className="app-background-overlay" />
+      </div>
       <main className={`spotlight-panel ${isQuickMode ? "spotlight-panel-quick" : ""}`}>
         <header className={`panel-header ${isQuickMode ? "quick-panel-header" : ""}`}>
           <div className="panel-title-block">
@@ -3518,13 +3780,34 @@ function App() {
                 <p className="hint compact-hint">No items match the current filters.</p>
               ) : null}
 
-              <div
-                className={
-                  isQuickMode
-                    ? `results-stage quick-results-stage ${showQuickEmptyState ? "is-empty" : ""}`
-                    : "results-stage"
-                }
-              >
+              {showRecentActivity ? (
+                <section className="recent-activity-panel" aria-label="Recent searches and files">
+                  <div className="recent-activity-header">
+                    <strong>Recent</strong>
+                  </div>
+
+                  {visibleRecentActivity.length > 0 ? (
+                    <div className="recent-activity-grid">
+                      {visibleRecentActivity.map(renderRecentActivityCard)}
+                    </div>
+                  ) : (
+                    <div className="recent-activity-empty">
+                      <strong>No recent activity yet</strong>
+                      <span>
+                        Search something or open a file from the results list, then it will show up
+                        here.
+                      </span>
+                    </div>
+                  )}
+                </section>
+              ) : (
+                <div
+                  className={
+                    isQuickMode
+                      ? `results-stage quick-results-stage ${showQuickEmptyState ? "is-empty" : ""}`
+                      : "results-stage"
+                  }
+                >
                 <div
                   className={`results-list-shell ${isQuickMode ? "quick-results-column" : ""} ${
                     isQuickMode && canLoadMore ? "has-overlay-load-more" : ""
@@ -3839,7 +4122,8 @@ function App() {
                   )}
                 </aside>
               ) : null}
-              </div>
+                </div>
+              )}
 
               {!isQuickMode && canLoadMore ? (
                 <div className="load-more-row">
@@ -4475,6 +4759,53 @@ function App() {
                   {searchLimitError ? <p className="advanced-error">{searchLimitError}</p> : null}
                   {searchLimitMessage ? <p className="advanced-success">{searchLimitMessage}</p> : null}
                 </div>
+
+                <div className="advanced-settings-section">
+                  <div className="advanced-section-header">
+                    <div>
+                      <h3>Search history</h3>
+                      <p className="advanced-note">
+                        Show recent searches and opened files in the full workspace when the search
+                        box is empty.
+                      </p>
+                    </div>
+                    <span className="theme-mode-status">
+                      {recentActivityEnabled ? "History on" : "History off"}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    className={`settings-switch-card settings-switch-card-button ${
+                      recentActivityEnabled ? "is-active" : ""
+                    }`}
+                    role="switch"
+                    aria-checked={recentActivityEnabled}
+                    onClick={() => {
+                      setRecentActivityEnabled((previous) => !previous);
+                    }}
+                  >
+                    <div className="settings-switch-copy">
+                      <strong>Show recent searches in the empty search area</strong>
+                      <span>
+                        Keeps up to {RECENT_ACTIVITY_LIMIT} recent searches and opened files ready
+                        to reopen from the Search tab.
+                      </span>
+                    </div>
+                    <span
+                      className={`scan-switch settings-switch-toggle settings-switch-toggle-button ${
+                        recentActivityEnabled ? "is-on" : ""
+                      }`}
+                      aria-hidden="true"
+                    >
+                      <span className="scan-switch-slider" aria-hidden="true" />
+                      <span>{recentActivityEnabled ? "On" : "Off"}</span>
+                    </span>
+                  </button>
+                  <p className="advanced-note">
+                    Turn this off to hide the recent panel and stop adding new history entries.
+                  </p>
+                </div>
               </div>
             </div>
           </section>
@@ -4565,6 +4896,7 @@ function App() {
                     {`Current preset: ${activeThemePreset.label}. Use the header toggle anytime to switch between its dark and light versions.`}
                   </p>
                 </div>
+
               </div>
             </div>
           </section>
@@ -4643,14 +4975,19 @@ function App() {
                         onClick={() => {
                           void openExternalLink(item.url);
                         }}
-                      >
-                        <div className="developer-app-card-top">
-                          <span className={`developer-app-icon-shell is-${item.accent}`} aria-hidden="true">
-                            <DeveloperAppIcon icon={item.icon} />
-                          </span>
-                          <div className="developer-app-copy">
-                            <strong>{item.name}</strong>
-                            <span>{item.blurb}</span>
+                        >
+                          <div className="developer-app-card-top">
+                            <span className={`developer-app-icon-shell is-${item.accent}`} aria-hidden="true">
+                              <img
+                                className="developer-app-icon-image"
+                                src={item.iconSrc}
+                                alt=""
+                                draggable={false}
+                              />
+                            </span>
+                            <div className="developer-app-copy">
+                              <strong>{item.name}</strong>
+                              <span>{item.blurb}</span>
                           </div>
                         </div>
                         <div className="developer-app-card-footer">

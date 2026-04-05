@@ -747,6 +747,7 @@ pub fn run() {
             desktop::focus_existing_instance(app);
         }));
         builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+        builder = builder.plugin(desktop::window_state_plugin());
     }
 
     builder

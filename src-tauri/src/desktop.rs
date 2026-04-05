@@ -6,16 +6,20 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex,
+        Arc, Mutex, OnceLock,
     },
 };
 use tauri::{
     menu::{Menu, MenuItem},
+    plugin::TauriPlugin,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position,
     Runtime, Size, WebviewWindow, Window, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_window_state::{
+    AppHandleExt as WindowStateAppHandleExt, StateFlags, WindowExt as WindowStateWindowExt,
+};
 #[cfg(windows)]
 use windows::Win32::{
     Foundation::COLORREF,
@@ -42,6 +46,8 @@ const QUICK_WINDOW_MIN_WIDTH: f64 = 960.0;
 const QUICK_WINDOW_MIN_HEIGHT: f64 = 620.0;
 pub const WINDOW_MODE_EVENT: &str = "omni-search://window-mode";
 
+static WINDOW_STATE_SAVE_ENABLED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
 #[derive(Clone, Copy)]
 enum WindowMode {
     Full,
@@ -53,6 +59,22 @@ impl WindowMode {
         match self {
             Self::Full => "full",
             Self::Quick => "quick",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum PersistedWindowMode {
+    Full,
+    Quick,
+}
+
+impl From<WindowMode> for PersistedWindowMode {
+    fn from(value: WindowMode) -> Self {
+        match value {
+            WindowMode::Full => Self::Full,
+            WindowMode::Quick => Self::Quick,
         }
     }
 }
@@ -77,23 +99,25 @@ impl Default for DesktopSettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct SavedWindowBounds {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    maximized: bool,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct PersistedDesktopState {
     #[serde(default)]
     settings: DesktopSettings,
     #[serde(default)]
-    full_window_bounds: Option<SavedWindowBounds>,
+    last_full_window_layout: Option<FullWindowLayoutSnapshot>,
+    #[serde(default)]
+    last_window_mode: Option<PersistedWindowMode>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FullWindowLayoutSnapshot {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    maximized: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -105,8 +129,10 @@ struct WindowModePayload {
 pub struct DesktopRuntimeState {
     window_mode: Mutex<WindowMode>,
     settings: Mutex<DesktopSettings>,
-    saved_full_window_bounds: Mutex<Option<SavedWindowBounds>>,
+    last_full_window_layout: Mutex<Option<FullWindowLayoutSnapshot>>,
     active_shortcut: Mutex<Option<String>>,
+    window_state_save_enabled: Arc<AtomicBool>,
+    pending_full_restore_from_quick: AtomicBool,
     is_quitting: AtomicBool,
 }
 
@@ -115,11 +141,34 @@ impl Default for DesktopRuntimeState {
         Self {
             window_mode: Mutex::new(WindowMode::Full),
             settings: Mutex::new(DesktopSettings::default()),
-            saved_full_window_bounds: Mutex::new(None),
+            last_full_window_layout: Mutex::new(None),
             active_shortcut: Mutex::new(None),
+            window_state_save_enabled: shared_window_state_save_enabled(),
+            pending_full_restore_from_quick: AtomicBool::new(false),
             is_quitting: AtomicBool::new(false),
         }
     }
+}
+
+fn shared_window_state_save_enabled() -> Arc<AtomicBool> {
+    WINDOW_STATE_SAVE_ENABLED
+        .get_or_init(|| Arc::new(AtomicBool::new(true)))
+        .clone()
+}
+
+fn full_window_state_flags() -> StateFlags {
+    StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED
+}
+
+pub fn window_state_plugin<R: Runtime>() -> TauriPlugin<R> {
+    let save_enabled = shared_window_state_save_enabled();
+    tauri_plugin_window_state::Builder::default()
+        .skip_initial_state(MAIN_WINDOW_LABEL)
+        .with_state_flags(full_window_state_flags())
+        .with_filter(move |label| {
+            label == MAIN_WINDOW_LABEL && save_enabled.load(Ordering::SeqCst)
+        })
+        .build()
 }
 
 fn desktop_state<R: Runtime>(app: &AppHandle<R>) -> &DesktopRuntimeState {
@@ -190,17 +239,28 @@ fn sanitize_desktop_settings(settings: DesktopSettings) -> DesktopSettings {
     }
 }
 
-fn sanitize_saved_window_bounds(bounds: Option<SavedWindowBounds>) -> Option<SavedWindowBounds> {
-    bounds.filter(|bounds| {
-        bounds.width >= FULL_WINDOW_MIN_WIDTH as u32 && bounds.height >= FULL_WINDOW_MIN_HEIGHT as u32
-    })
-}
-
 fn sanitize_persisted_desktop_state(state: PersistedDesktopState) -> PersistedDesktopState {
     PersistedDesktopState {
         settings: sanitize_desktop_settings(state.settings),
-        full_window_bounds: sanitize_saved_window_bounds(state.full_window_bounds),
+        last_full_window_layout: state
+            .last_full_window_layout
+            .and_then(sanitize_full_window_layout_snapshot),
+        last_window_mode: state.last_window_mode,
     }
+}
+
+fn sanitize_full_window_layout_snapshot(
+    snapshot: FullWindowLayoutSnapshot,
+) -> Option<FullWindowLayoutSnapshot> {
+    if snapshot.width == 0 || snapshot.height == 0 {
+        return None;
+    }
+
+    Some(FullWindowLayoutSnapshot {
+        width: snapshot.width.max(FULL_WINDOW_MIN_WIDTH as u32),
+        height: snapshot.height.max(FULL_WINDOW_MIN_HEIGHT as u32),
+        ..snapshot
+    })
 }
 
 fn desktop_settings_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -226,7 +286,8 @@ fn load_desktop_state<R: Runtime>(app: &AppHandle<R>) -> PersistedDesktopState {
             Err(state_err) => match serde_json::from_str::<DesktopSettings>(&contents) {
                 Ok(settings) => PersistedDesktopState {
                     settings: sanitize_desktop_settings(settings),
-                    full_window_bounds: None,
+                    last_full_window_layout: None,
+                    last_window_mode: None,
                 },
                 Err(_) => {
                     log_desktop_error("parse the desktop settings file", &state_err.to_string());
@@ -274,6 +335,31 @@ fn set_desktop_settings<R: Runtime>(
     Ok(())
 }
 
+fn set_window_state_save_enabled<R: Runtime>(app: &AppHandle<R>, enabled: bool) {
+    desktop_state(app)
+        .window_state_save_enabled
+        .store(enabled, Ordering::SeqCst);
+}
+
+fn set_pending_full_restore_from_quick<R: Runtime>(app: &AppHandle<R>, pending: bool) {
+    desktop_state(app)
+        .pending_full_restore_from_quick
+        .store(pending, Ordering::SeqCst);
+}
+
+fn has_pending_full_restore_from_quick<R: Runtime>(app: &AppHandle<R>) -> bool {
+    desktop_state(app)
+        .pending_full_restore_from_quick
+        .load(Ordering::SeqCst)
+}
+
+fn sync_window_state_save_behavior<R: Runtime>(app: &AppHandle<R>) {
+    set_window_state_save_enabled(
+        app,
+        remember_window_bounds_enabled(app) && matches!(current_window_mode(app), WindowMode::Full),
+    );
+}
+
 fn is_background_mode_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
     desktop_state(app)
         .settings
@@ -306,77 +392,141 @@ fn set_window_mode<R: Runtime>(app: &AppHandle<R>, mode: WindowMode) -> Result<(
     Ok(())
 }
 
-fn current_saved_full_window_bounds<R: Runtime>(
-    app: &AppHandle<R>,
-) -> Result<Option<SavedWindowBounds>, String> {
-    desktop_state(app)
-        .saved_full_window_bounds
-        .lock()
-        .map_err(|_| "Failed to lock saved window bounds".to_string())
-        .map(|bounds| bounds.clone())
-}
-
-fn set_saved_full_window_bounds<R: Runtime>(
-    app: &AppHandle<R>,
-    bounds: Option<SavedWindowBounds>,
-) -> Result<(), String> {
-    *desktop_state(app)
-        .saved_full_window_bounds
-        .lock()
-        .map_err(|_| "Failed to lock saved window bounds".to_string())? =
-        sanitize_saved_window_bounds(bounds);
+fn set_window_mode_and_sync<R: Runtime>(app: &AppHandle<R>, mode: WindowMode) -> Result<(), String> {
+    set_window_mode(app, mode)?;
+    sync_window_state_save_behavior(app);
     Ok(())
 }
 
 fn persist_desktop_state<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let last_full_window_layout = desktop_state(app)
+        .last_full_window_layout
+        .lock()
+        .map_err(|_| "Failed to lock the live full window layout".to_string())?
+        .clone();
     save_desktop_state_file(
         app,
         &PersistedDesktopState {
             settings: current_desktop_settings(app)?,
-            full_window_bounds: current_saved_full_window_bounds(app)?,
+            last_full_window_layout,
+            last_window_mode: Some(PersistedWindowMode::from(current_window_mode(app))),
         },
     )
 }
 
-fn capture_full_window_bounds<R: Runtime>(
-    app: &AppHandle<R>,
+fn snapshot_from_window<R: Runtime>(
     window: &WebviewWindow<R>,
+) -> Result<FullWindowLayoutSnapshot, String> {
+    let position = window.outer_position().map_err(|err| err.to_string())?;
+    let size = window.inner_size().map_err(|err| err.to_string())?;
+
+    Ok(FullWindowLayoutSnapshot {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+        maximized: window.is_maximized().map_err(|err| err.to_string())?,
+    })
+}
+
+fn apply_full_window_layout_snapshot<R: Runtime>(
+    window: &WebviewWindow<R>,
+    snapshot: &FullWindowLayoutSnapshot,
 ) -> Result<(), String> {
-    if !remember_window_bounds_enabled(app) || !matches!(current_window_mode(app), WindowMode::Full)
-    {
-        return Ok(());
+    window
+        .set_min_size(Some(LogicalSize::new(
+            FULL_WINDOW_MIN_WIDTH,
+            FULL_WINDOW_MIN_HEIGHT,
+        )))
+        .map_err(|err| err.to_string())?;
+    if window.is_maximized().map_err(|err| err.to_string())? {
+        window.unmaximize().map_err(|err| err.to_string())?;
     }
-
-    let previous_bounds = current_saved_full_window_bounds(app)?;
-    let next_bounds = if window.is_maximized().map_err(|err| err.to_string())? {
-        previous_bounds.map(|bounds| SavedWindowBounds {
-            maximized: true,
-            ..bounds
-        })
-    } else {
-        let position = window.outer_position().map_err(|err| err.to_string())?;
-        let size = window.outer_size().map_err(|err| err.to_string())?;
-        Some(SavedWindowBounds {
-            x: position.x,
-            y: position.y,
-            width: size.width,
-            height: size.height,
-            maximized: false,
-        })
-    };
-
-    if let Some(bounds) = sanitize_saved_window_bounds(next_bounds) {
-        set_saved_full_window_bounds(app, Some(bounds))?;
+    window
+        .set_size(Size::Physical(PhysicalSize::new(
+            snapshot.width,
+            snapshot.height,
+        )))
+        .map_err(|err| err.to_string())?;
+    window
+        .set_position(Position::Physical(PhysicalPosition::new(
+            snapshot.x,
+            snapshot.y,
+        )))
+        .map_err(|err| err.to_string())?;
+    if snapshot.maximized {
+        window.maximize().map_err(|err| err.to_string())?;
     }
-
     Ok(())
 }
 
-fn persist_full_window_bounds_snapshot<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    if matches!(current_window_mode(app), WindowMode::Full) {
-        capture_full_window_bounds(app, &main_window(app)?)?;
+fn snapshot_looks_like_quick_layout(snapshot: &FullWindowLayoutSnapshot) -> bool {
+    if snapshot.maximized {
+        return false;
+    }
+
+    let width_scale = snapshot.width as f64 / QUICK_WINDOW_WIDTH;
+    let height_scale = snapshot.height as f64 / QUICK_WINDOW_HEIGHT;
+    width_scale >= 0.9
+        && height_scale >= 0.9
+        && (width_scale - height_scale).abs() <= 0.03
+}
+
+fn persist_full_window_state_snapshot<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if matches!(current_window_mode(app), WindowMode::Quick) {
+        // Quick mode reuses the same native window, but it should never overwrite the
+        // saved full-workspace bounds on hide/quit.
+        set_window_state_save_enabled(app, false);
+        return persist_desktop_state(app);
+    }
+
+    if remember_window_bounds_enabled(app) && matches!(current_window_mode(app), WindowMode::Full) {
+        let window = main_window(app)?;
+        capture_live_full_window_layout(app, &window)?;
+        set_window_state_save_enabled(app, true);
+        app.save_window_state(full_window_state_flags())
+            .map_err(|err| err.to_string())?;
+        sync_window_state_save_behavior(app);
     }
     persist_desktop_state(app)
+}
+
+fn capture_live_full_window_layout<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Result<(), String> {
+    let snapshot = snapshot_from_window(window)?;
+
+    *desktop_state(app)
+        .last_full_window_layout
+        .lock()
+        .map_err(|_| "Failed to lock the live full window layout".to_string())? = Some(snapshot);
+    Ok(())
+}
+
+fn restore_live_full_window_layout<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Result<bool, String> {
+    if !has_pending_full_restore_from_quick(app) {
+        return Ok(false);
+    }
+
+    let snapshot = desktop_state(app)
+        .last_full_window_layout
+        .lock()
+        .map_err(|_| "Failed to lock the live full window layout".to_string())?
+        .clone();
+
+    let Some(snapshot) = snapshot else {
+        set_pending_full_restore_from_quick(app, false);
+        return Ok(false);
+    };
+
+    apply_full_window_layout_snapshot(window, &snapshot)?;
+
+    set_pending_full_restore_from_quick(app, false);
+    Ok(true)
 }
 
 fn apply_default_main_window_layout<R: Runtime>(
@@ -418,9 +568,21 @@ fn restore_saved_full_window_layout<R: Runtime>(
         return Ok(false);
     }
 
-    let Some(bounds) = current_saved_full_window_bounds(app)? else {
+    let saved_snapshot = desktop_state(app)
+        .last_full_window_layout
+        .lock()
+        .map_err(|_| "Failed to lock the live full window layout".to_string())?
+        .clone();
+
+    if let Some(snapshot) = saved_snapshot {
+        apply_full_window_layout_snapshot(window, &snapshot)?;
+        return Ok(true);
+    }
+
+    let loaded_state = load_desktop_state(app);
+    if matches!(loaded_state.last_window_mode, Some(PersistedWindowMode::Quick)) {
         return Ok(false);
-    };
+    }
 
     window
         .set_min_size(Some(LogicalSize::new(
@@ -428,20 +590,24 @@ fn restore_saved_full_window_layout<R: Runtime>(
             FULL_WINDOW_MIN_HEIGHT,
         )))
         .map_err(|err| err.to_string())?;
-    if window.is_maximized().map_err(|err| err.to_string())? {
-        window.unmaximize().map_err(|err| err.to_string())?;
-    }
-    window
-        .set_size(Size::Physical(PhysicalSize::new(bounds.width, bounds.height)))
-        .map_err(|err| err.to_string())?;
-    window
-        .set_position(Position::Physical(PhysicalPosition::new(bounds.x, bounds.y)))
-        .map_err(|err| err.to_string())?;
-    if bounds.maximized {
-        window.maximize().map_err(|err| err.to_string())?;
-    }
 
-    Ok(true)
+    match window.restore_state(full_window_state_flags()) {
+        Ok(()) => {
+            let snapshot = snapshot_from_window(window)?;
+            if loaded_state.last_window_mode.is_none() && snapshot_looks_like_quick_layout(&snapshot) {
+                return Ok(false);
+            }
+
+            *desktop_state(app)
+                .last_full_window_layout
+                .lock()
+                .map_err(|_| "Failed to lock the live full window layout".to_string())? =
+                Some(snapshot);
+
+            Ok(true)
+        }
+        Err(_) => Ok(false),
+    }
 }
 
 fn apply_main_window_layout<R: Runtime>(
@@ -449,6 +615,10 @@ fn apply_main_window_layout<R: Runtime>(
     window: &WebviewWindow<R>,
     mode: WindowMode,
 ) -> Result<(), String> {
+    if matches!(mode, WindowMode::Full) && restore_live_full_window_layout(app, window)? {
+        return Ok(());
+    }
+
     if matches!(mode, WindowMode::Full) && restore_saved_full_window_layout(app, window)? {
         return Ok(());
     }
@@ -463,10 +633,17 @@ fn show_window_in_mode<R: Runtime>(app: &AppHandle<R>, mode: WindowMode) -> Resu
     let previous_mode = current_window_mode(app);
 
     if matches!(previous_mode, WindowMode::Full) && matches!(mode, WindowMode::Quick) {
-        persist_full_window_bounds_snapshot(app)?;
+        capture_live_full_window_layout(app, &window)?;
+        set_pending_full_restore_from_quick(app, true);
+        persist_full_window_state_snapshot(app)?;
     }
 
-    set_window_mode(app, mode)?;
+    if matches!(mode, WindowMode::Quick) {
+        set_window_mode_and_sync(app, mode)?;
+    } else {
+        set_window_state_save_enabled(app, false);
+        set_window_mode(app, mode)?;
+    }
 
     if is_visible && !was_minimized {
         window.hide().map_err(|err| err.to_string())?;
@@ -488,6 +665,7 @@ fn show_window_in_mode<R: Runtime>(app: &AppHandle<R>, mode: WindowMode) -> Resu
         apply_main_window_layout(app, &window, mode)?;
     }
 
+    sync_window_state_save_behavior(app);
     window.set_focus().map_err(|err| err.to_string())
 }
 
@@ -508,7 +686,10 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let window = main_window(app)?;
-    persist_full_window_bounds_snapshot(app)?;
+    persist_full_window_state_snapshot(app)?;
+    if matches!(current_window_mode(app), WindowMode::Full) {
+        set_pending_full_restore_from_quick(app, false);
+    }
     window.hide().map_err(|err| err.to_string())?;
     trim_process_working_set();
     Ok(())
@@ -726,7 +907,7 @@ fn register_app_shortcut<R: Runtime>(
 }
 
 fn quit_background_app<R: Runtime>(app: &AppHandle<R>) {
-    if let Err(err) = persist_full_window_bounds_snapshot(app) {
+    if let Err(err) = persist_full_window_state_snapshot(app) {
         log_desktop_error("persist the desktop window layout before quitting", &err);
     }
     desktop_state(app).is_quitting.store(true, Ordering::SeqCst);
@@ -821,19 +1002,19 @@ pub fn open_quick_window_command(app: AppHandle<tauri::Wry>) -> Result<(), Strin
 
 #[tauri::command]
 pub fn reset_window_layout_command(app: AppHandle<tauri::Wry>) -> Result<(), String> {
-    set_saved_full_window_bounds(&app, None)?;
-    persist_desktop_state(&app)?;
-
     if matches!(current_window_mode(&app), WindowMode::Full) {
         let window = main_window(&app)?;
         apply_default_main_window_layout(&window, WindowMode::Full)?;
+        capture_live_full_window_layout(&app, &window)?;
         if remember_window_bounds_enabled(&app) {
-            capture_full_window_bounds(&app, &window)?;
-            persist_desktop_state(&app)?;
+            set_window_state_save_enabled(&app, true);
+            app.save_window_state(full_window_state_flags())
+                .map_err(|err| err.to_string())?;
+            sync_window_state_save_behavior(&app);
         }
     }
 
-    Ok(())
+    persist_desktop_state(&app)
 }
 
 #[tauri::command]
@@ -896,13 +1077,13 @@ pub fn update_desktop_settings(
     };
 
     set_desktop_settings(&app, &next_settings)?;
+    sync_window_state_save_behavior(&app);
     if next_settings.remember_window_bounds && matches!(current_window_mode(&app), WindowMode::Full)
     {
-        if let Ok(window) = main_window(&app) {
-            capture_full_window_bounds(&app, &window)?;
-        }
+        persist_full_window_state_snapshot(&app)?;
+    } else {
+        persist_desktop_state(&app)?;
     }
-    persist_desktop_state(&app)?;
     Ok(next_settings)
 }
 
@@ -910,6 +1091,9 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
     setup_system_tray(app)?;
 
     let loaded_state = load_desktop_state(app.handle());
+    if let Ok(mut last_full_window_layout) = desktop_state(app.handle()).last_full_window_layout.lock() {
+        *last_full_window_layout = loaded_state.last_full_window_layout.clone();
+    }
     let loaded_settings = loaded_state.settings.clone();
     let resolved_shortcut = match register_app_shortcut(app.handle(), &loaded_settings) {
         Ok(shortcut) => shortcut,
@@ -926,10 +1110,7 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
     if let Err(err) = set_desktop_settings(app.handle(), &resolved_settings) {
         log_desktop_error("sync desktop settings in memory", &err);
     }
-    if let Err(err) = set_saved_full_window_bounds(app.handle(), loaded_state.full_window_bounds) {
-        log_desktop_error("sync saved window bounds in memory", &err);
-    }
-    if let Err(err) = set_window_mode(app.handle(), WindowMode::Full) {
+    if let Err(err) = set_window_mode_and_sync(app.handle(), WindowMode::Full) {
         log_desktop_error("sync the initial window mode", &err);
     }
     if let Ok(window) = main_window(app.handle()) {
@@ -940,6 +1121,9 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
             log_desktop_error("show the main window after restoring layout", &err.to_string());
         } else if let Err(err) = window.set_focus() {
             log_desktop_error("focus the main window after restoring layout", &err.to_string());
+        }
+        if let Err(err) = capture_live_full_window_layout(app.handle(), &window) {
+            log_desktop_error("capture the initial full window layout", &err);
         }
     }
     if let Err(err) = persist_desktop_state(app.handle()) {
@@ -966,13 +1150,6 @@ pub fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) 
     let app = window.app_handle();
 
     match event {
-        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-            if let Ok(window) = main_window(&app) {
-                if let Err(err) = capture_full_window_bounds(&app, &window) {
-                    log_desktop_error("capture the full window bounds", &err);
-                }
-            }
-        }
         WindowEvent::CloseRequested { api, .. } => {
             if !desktop_state(&app).is_quitting.load(Ordering::SeqCst)
                 && is_background_mode_enabled(&app)
@@ -981,7 +1158,7 @@ pub fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) 
                 if let Err(err) = hide_main_window(&app) {
                     log_desktop_error("hide the app instead of closing", &err);
                 }
-            } else if let Err(err) = persist_full_window_bounds_snapshot(&app) {
+            } else if let Err(err) = persist_full_window_state_snapshot(&app) {
                 log_desktop_error("persist the desktop window layout before closing", &err);
             }
         }
