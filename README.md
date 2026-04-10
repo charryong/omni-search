@@ -1,7 +1,7 @@
 # OmniSearch
 
-High-performance Windows desktop file search built with Tauri v2, Rust, and C++.
-OmniSearch indexes NTFS metadata directly through USN/MFT APIs for fast global search with advanced filters and duplicate detection.
+Fast Windows desktop file search built with Tauri v2, Rust, and C++.
+OmniSearch reads NTFS metadata directly through USN/MFT APIs for quick global search, advanced filters, duplicate cleanup, and keyboard-friendly workflows.
 
 <hr>
 
@@ -37,9 +37,13 @@ OmniSearch indexes NTFS metadata directly through USN/MFT APIs for fast global s
   <img src="src-tauri/icons/icon.png" width="150" alt="OmniSearch Logo">
 </p>
 
+<p align="center">
+  Search faster across your Windows drives with advanced filters, duplicate cleanup, Quick Window access, and a growing Microsoft Store version.
+</p>
+
 <p align="center"><strong>Search Experience</strong></p>
 <p align="center">
-  <img src="docs/images/search-page1.png" width="88%" alt="OmniSearch Screenshot">
+  <img src="docs/images/main_view.png" width="84%" alt="OmniSearch Screenshot">
 </p>
 <p align="center"><em>Main search tab with filters, categories, previews, and actions.</em></p>
 <p align="center"><sub>──────────── · ────────────</sub></p>
@@ -62,6 +66,33 @@ OmniSearch indexes NTFS metadata directly through USN/MFT APIs for fast global s
   <em>Duplicate Finder identifies identical files and shows reclaimable space, alongside advanced drive scope and indexing controls.</em>
 </p>
 
+<p align="center">&nbsp;</p>
+
+<table align="center">
+  <tr>
+    <td><strong>Microsoft Store Version Features Only</strong></td>
+    <td width="18"></td>
+    <td>
+      <a href="https://apps.microsoft.com/detail/9N7FQ8KPLRJ2">
+        <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="180" alt="Download from Microsoft Store" />
+      </a>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary><strong>Preview Microsoft Store extras</strong></summary>
+
+<p>custom background images for the app and a compact search bar mode.</p>
+
+<p align="center">
+  <img src="public/toggle_img1.png" width="44%" alt="Compact Quick Window teaser preview" />
+  <img src="public/theme2.png" width="44%" alt="Custom background teaser preview" />
+</p>
+</details>
+
+<p align="center">&nbsp;</p>
+
 <p align="center">
   <img src="docs/images/omnisearch-architecture.svg" width="92%" alt="OmniSearch Architecture">
 </p>
@@ -73,6 +104,8 @@ OmniSearch indexes NTFS metadata directly through USN/MFT APIs for fast global s
 - Live incremental index updates via USN journal watcher after initial scan.
 - Rust FFI bridge exposing Tauri commands for indexing, searching, duplicates, drive listing, and file actions.
 - Fast search UI with advanced filters: extension, file size range, created date range.
+- Inline search syntax with `ext:` plus text content operators like `content:`, `ansicontent:`, `utf8content:`, `utf16content:`, and `utf16becontent:`.
+- Hybrid search flow that keeps normal path/name lookups fast and only scans file contents from disk when you explicitly use content syntax.
 - Duplicate finder with multithreaded hashing and grouped results (plus reclaimable size).
 - Duplicate scan controls: live progress %, scanned/total counters, groups found, and cancel support.
 - Drive picker with NTFS detection and volume access checks.
@@ -89,6 +122,7 @@ OmniSearch indexes NTFS metadata directly through USN/MFT APIs for fast global s
 - Desktop behavior settings for tray mode, background running, and configurable global shortcut handling.
 - Full workspace / Quick Window switching from the tray menu, hotkey, and in-app controls.
 - Light/dark theme toggle and dedicated Search / Duplicates / Settings / Themes / About tabs.
+- Search syntax reference tab plus the standalone [Content Search Guide](CONTENT_SEARCH_GUIDE.md) for examples and operator details.
 - Installer targets via Tauri bundle (MSI and NSIS).
 - Windows manifest requests Administrator privileges (`requireAdministrator`) for raw volume access.
 
@@ -124,7 +158,8 @@ omni-search/
 │   └── images/                  # Architecture & Screenshots
 ├── index.html                   # HTML Entry Point
 ├── package.json                 # Node.js Dependencies
-└── README.md                    # Project Documentation
+├── README.md                    # Project Documentation
+└── CONTENT_SEARCH_GUIDE.md      # Guide for Content Search Implementation
 ```
 
 ## How It Works
@@ -235,3 +270,4 @@ Update visible app metadata in `src-tauri/tauri.conf.json`:
    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Eul45/omni-search&type=date&legend=top-left" />
  </picture>
 </a>
+

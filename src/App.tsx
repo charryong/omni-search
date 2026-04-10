@@ -24,6 +24,7 @@ import type { DesktopSettings, WindowMode } from "./desktop";
 const POLL_INTERVAL_MS = 700;
 const SEARCH_DEBOUNCE_MS = 130;
 const FILTER_SEARCH_DEBOUNCE_MS = 320;
+const CONTENT_SEARCH_DEBOUNCE_MS = 560;
 const SEARCH_LIMIT = 200;
 const SEARCH_LIMIT_MIN = SEARCH_LIMIT;
 const SEARCH_LIMIT_MAX = 5000;
@@ -48,6 +49,8 @@ type SearchResult = {
   modifiedUnix: number;
   isDirectory: boolean;
 };
+
+type ResultIconKind = "folder" | "app" | "image" | "video" | "pdf" | "archive" | "doc" | "file";
 
 type DuplicateFile = {
   name: string;
@@ -93,12 +96,14 @@ type SearchResultRenameDraft = {
   path: string;
   currentName: string;
   nextName: string;
+  isDirectory: boolean;
 };
 
 type SearchResultDeleteCandidate = {
   rowKey: string;
   path: string;
   name: string;
+  isDirectory: boolean;
 };
 
 type DriveInfo = {
@@ -125,6 +130,16 @@ type DeveloperApp = {
   iconSrc: string;
   accent: "sky" | "mint" | "amber";
 };
+type SearchSyntaxHelpSection = {
+  id: string;
+  label: string;
+  title: string;
+  summary: string;
+  syntax?: string;
+  details: string[];
+  examples: string[];
+  notes?: string[];
+};
 type RecentActivityQueryEntry = {
   kind: "query";
   query: string;
@@ -136,7 +151,7 @@ type RecentActivityItemEntry = SearchResult & {
 };
 type RecentActivityEntry = RecentActivityQueryEntry | RecentActivityItemEntry;
 
-type ActiveTab = "search" | "duplicates" | "advanced" | "themes" | "about";
+type ActiveTab = "search" | "duplicates" | "advanced" | "themes" | "syntax" | "about";
 type ResultViewTab = "all" | "apps" | "media" | "docs" | "archives";
 type ResultSortMode = "relevance" | "newest" | "largest" | "name";
 type ThemeMode = "dark" | "light";
@@ -870,6 +885,152 @@ const RESULT_VIEW_TABS: Array<{ id: ResultViewTab; label: string }> = [
   { id: "archives", label: "Archives" },
 ];
 
+type SearchSyntaxPreview = {
+  pathQuery: string;
+  hasContentSearch: boolean;
+};
+
+const SEARCH_SYNTAX_PATTERN =
+  /(?:^|\s)(content|ansicontent|utf8content|utf16content|utf16becontent|ext):(?:"([^"]*)"|(\S+))/gi;
+
+const SEARCH_SYNTAX_HELP_SECTIONS: SearchSyntaxHelpSection[] = [
+  {
+    id: "basics",
+    label: "Basics",
+    title: "Search Basics",
+    summary: "Normal OmniSearch queries stay indexed and fast.",
+    syntax: "plain words",
+    details: [
+      "Plain words match against the indexed file name and full path.",
+      "Inline operators can be mixed into the same query.",
+      "Content scanning only starts when a content operator is present.",
+    ],
+    examples: ["invoice", "src", "src ext:ts;tsx"],
+    notes: ["Only the operators shown in this help are currently supported in OmniSearch."],
+  },
+  {
+    id: "ext",
+    label: "ext:",
+    title: "Inline Extension Filter",
+    syntax: "ext:txt;md",
+    summary: "Filter file types directly inside the main search box.",
+    details: [
+      "Use a semicolon-separated list like ext:ts;tsx or ext:json;toml.",
+      "This works together with the normal Extension field and metadata filters.",
+      "Folder aliases like folder, folders, dir, and directory are also supported.",
+    ],
+    examples: ["ext:txt", "ext:ts;tsx", 'src ext:json;toml content:"localhost"'],
+  },
+  {
+    id: "content",
+    label: "content:",
+    title: "Auto Text Content Search",
+    syntax: 'content:"text"',
+    summary: "Read matching files from disk and look for text inside them.",
+    details: [
+      "Use quotes for phrases with spaces.",
+      "This auto-detects common text encodings and skips folders.",
+      "Pair it with ext: or path words for much better speed.",
+    ],
+    examples: [
+      "content:hello",
+      'content:"quick start"',
+      'ext:txt content:"invoice number"',
+      'src ext:tsx content:"before"',
+    ],
+    notes: [
+      "Broad content: searches can take longer because files must be opened and read from disk.",
+    ],
+  },
+  {
+    id: "ansi",
+    label: "ANSI",
+    title: "ANSI Content Search",
+    syntax: 'ansicontent:"text"',
+    summary: "Force ANSI decoding for older text files and exports.",
+    details: [
+      "Useful for older .ini, .bat, .cmd, .log, or legacy exported text files.",
+      "Use this when the default content: search misses text that looks readable in older editors.",
+    ],
+    examples: [
+      'ansicontent:"[Settings]"',
+      'ext:ini ansicontent:"InstallPath"',
+      'ext:log;txt ansicontent:"Access denied"',
+    ],
+  },
+  {
+    id: "utf8",
+    label: "UTF-8",
+    title: "UTF-8 Content Search",
+    syntax: 'utf8content:"text"',
+    summary: "Force UTF-8 decoding for modern code and text files.",
+    details: [
+      "Best for source code, JSON, Markdown, HTML, CSS, and many plain-text project files.",
+      "This is useful when you want predictable UTF-8 matching during testing.",
+    ],
+    examples: [
+      'utf8content:"useEffect"',
+      'ext:json utf8content:"apiKey"',
+      'src ext:ts;tsx utf8content:"startTransition"',
+    ],
+  },
+  {
+    id: "utf16",
+    label: "UTF-16",
+    title: "UTF-16 Content Search",
+    syntax: 'utf16content:"text"',
+    summary: "Force UTF-16 little-endian decoding for Windows-style text files.",
+    details: [
+      "Useful for some Windows-generated logs and exported text files.",
+      "This targets UTF-16 little-endian content specifically.",
+    ],
+    examples: ['utf16content:"Event ID"', 'ext:txt utf16content:"Windows Error Reporting"'],
+  },
+  {
+    id: "utf16be",
+    label: "UTF-16 BE",
+    title: "UTF-16 Big Endian Content Search",
+    syntax: 'utf16becontent:"text"',
+    summary: "Force UTF-16 big-endian decoding when you need exact compatibility testing.",
+    details: [
+      "This is less common, but it is supported for testing and special files.",
+      "Use it only when auto mode or utf16content: does not match the file correctly.",
+    ],
+    examples: ['utf16becontent:"Title"', 'ext:txt utf16becontent:"Chapter 1"'],
+  },
+  {
+    id: "combine",
+    label: "Combine",
+    title: "Combining Search Tools",
+    syntax: 'path words + ext:<list> + content:"text"',
+    summary: "Combine the search box syntax with the normal UI filters for tighter results.",
+    details: [
+      "Path words, ext:, and content operators all work together in the main query.",
+      "The Extension field, size controls, and created date filters still apply too.",
+      "The best pattern is usually folder/path words plus ext: plus a quoted content phrase.",
+    ],
+    examples: [
+      'src ext:tsx content:"before"',
+      'docs ext:md content:"quick start"',
+      'config ext:json;toml content:"localhost"',
+      'ext:log content:"connection refused"',
+    ],
+  },
+  {
+    id: "speed",
+    label: "Speed",
+    title: "Speed Tips",
+    summary: "Content search is much faster when you narrow candidates first.",
+    details: [
+      "content:hello is slow because it may need to open many files from disk.",
+      "Add path words, ext:, size filters, or date filters to reduce the amount of work.",
+      "Changing or clearing the search box automatically cancels the previous content search.",
+    ],
+    examples: ['content:"license"', 'ext:txt content:"license"', 'src ext:ts;tsx content:"useEffect"'],
+    notes: ["For the best speed, prefer targeted queries over broad content-only searches."],
+  },
+];
+
 const APP_EXTENSIONS = new Set([
   "exe",
   "msi",
@@ -1064,6 +1225,93 @@ function SearchLensIcon() {
         strokeLinecap="round"
         strokeWidth="2.55"
       />
+    </svg>
+  );
+}
+
+function ResultTypeIcon({ kind, className }: { kind: ResultIconKind; className?: string }) {
+  if (kind === "folder") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+        <path d="M3.75 8.25a2.25 2.25 0 0 1 2.25-2.25h4.1l1.65 1.85H18a2.25 2.25 0 0 1 2.25 2.25v5.9A2.25 2.25 0 0 1 18 18.25H6A2.25 2.25 0 0 1 3.75 16z" />
+        <path d="M3.75 9.5h16.5" />
+      </svg>
+    );
+  }
+
+  if (kind === "app") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+        <rect x="4.25" y="4.25" width="6.25" height="6.25" rx="1.2" />
+        <rect x="13.5" y="4.25" width="6.25" height="6.25" rx="1.2" />
+        <rect x="4.25" y="13.5" width="6.25" height="6.25" rx="1.2" />
+        <rect x="13.5" y="13.5" width="6.25" height="6.25" rx="1.2" />
+      </svg>
+    );
+  }
+
+  if (kind === "image") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+        <rect x="4" y="4.5" width="16" height="15" rx="2.2" />
+        <circle cx="9" cy="9.25" r="1.5" />
+        <path d="m6.5 17 3.7-3.7a1.3 1.3 0 0 1 1.84 0L14 15.25l1.3-1.3a1.3 1.3 0 0 1 1.84 0L19 15.8" />
+      </svg>
+    );
+  }
+
+  if (kind === "video") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+        <rect x="4" y="5" width="12.75" height="14" rx="2.1" />
+        <path d="m19.5 8.25-2.75 2v3.5l2.75 2z" />
+        <path d="m9.25 9.25 4.25 2.75-4.25 2.75z" />
+      </svg>
+    );
+  }
+
+  if (kind === "pdf") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+        <path d="M7 3.75h6.95L18.5 8.3V18A2.25 2.25 0 0 1 16.25 20.25h-9A2.25 2.25 0 0 1 5 18V6A2.25 2.25 0 0 1 7.25 3.75z" />
+        <path d="M13.75 3.95v4.1h4.1" />
+        <path d="M8 15.75h2.1a1.3 1.3 0 0 0 0-2.6H8zm0 0v2.1M12.1 17.85v-4.7h1.35a1.95 1.95 0 1 1 0 3.9H12.1m5.25.8h-2.1v-4.7h2" />
+      </svg>
+    );
+  }
+
+  if (kind === "archive") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+        <rect x="5" y="4.75" width="14" height="14.5" rx="2" />
+        <path d="M9.5 4.75v14.5M11.3 7h1.4M11.3 10h1.4M11.3 13h1.4M10.9 16h2.2" />
+      </svg>
+    );
+  }
+
+  if (kind === "doc") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+        <path d="M7 3.75h6.95L18.5 8.3V18A2.25 2.25 0 0 1 16.25 20.25h-9A2.25 2.25 0 0 1 5 18V6A2.25 2.25 0 0 1 7.25 3.75z" />
+        <path d="M13.75 3.95v4.1h4.1" />
+        <path d="M8.25 11.25h7.5M8.25 14.5h7.5M8.25 17.75h5.25" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+      <path d="M7 3.75h6.95L18.5 8.3V18A2.25 2.25 0 0 1 16.25 20.25h-9A2.25 2.25 0 0 1 5 18V6A2.25 2.25 0 0 1 7.25 3.75z" />
+      <path d="M13.75 3.95v4.1h4.1" />
+    </svg>
+  );
+}
+
+function ConsoleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.75" y="5" width="16.5" height="14" rx="2.4" />
+      <path d="m7.5 10 2.5 2-2.5 2M11.75 16h4.75" />
     </svg>
   );
 }
@@ -1379,6 +1627,52 @@ function previewKindFromResult(result: SearchResult): PreviewKind {
   return "none";
 }
 
+function iconKindFromResult(result: SearchResult): ResultIconKind {
+  if (result.isDirectory) {
+    return "folder";
+  }
+
+  const ext = normalizedExtension(result);
+  if (!ext) {
+    return "file";
+  }
+
+  if (APP_EXTENSIONS.has(ext)) {
+    return "app";
+  }
+  if (IMAGE_PREVIEW_EXTENSIONS.has(ext)) {
+    return "image";
+  }
+  if (VIDEO_PREVIEW_EXTENSIONS.has(ext)) {
+    return "video";
+  }
+  if (ext === "pdf") {
+    return "pdf";
+  }
+  if (ARCHIVE_EXTENSIONS.has(ext)) {
+    return "archive";
+  }
+  if (DOC_EXTENSIONS.has(ext)) {
+    return "doc";
+  }
+  return "file";
+}
+
+function ResultFallbackIcon({
+  result,
+  className,
+}: {
+  result: SearchResult;
+  className?: string;
+}) {
+  const kind = iconKindFromResult(result);
+  return (
+    <span className={`result-fallback-icon-shell kind-${kind}${className ? ` ${className}` : ""}`} aria-hidden="true">
+      <ResultTypeIcon kind={kind} className="result-fallback-icon" />
+    </span>
+  );
+}
+
 function previewSrcFromPath(path: string): string {
   try {
     return convertFileSrc(path, "asset");
@@ -1627,6 +1921,31 @@ function formatShortcutLabel(value: string): string {
     .join("+");
 }
 
+function parseSearchSyntaxPreview(value: string): SearchSyntaxPreview {
+  let hasContentSearch = false;
+
+  const pathQuery = value
+    .replace(SEARCH_SYNTAX_PATTERN, (match, keyword: string) => {
+      if (keyword.toLowerCase().includes("content")) {
+        hasContentSearch = true;
+      }
+      return match.startsWith(" ") ? " " : "";
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return {
+    pathQuery,
+    hasContentSearch,
+  };
+}
+
+function cancelSearchRequest(): void {
+  void invoke("cancel_search").catch(() => {
+    // Ignore cancellation failures outside the desktop shell.
+  });
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") {
@@ -1672,6 +1991,7 @@ function App() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [searchSyntaxHelpSectionId, setSearchSyntaxHelpSectionId] = useState<string>("basics");
   const [activeTab, setActiveTab] = useState<ActiveTab>("search");
   const [duplicateMinSizeMb, setDuplicateMinSizeMb] = useState("50");
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
@@ -1834,7 +2154,10 @@ function App() {
     status.lastError && status.lastError.toLowerCase().includes(DUPLICATE_CANCEL_MESSAGE.toLowerCase())
       ? null
       : status.lastError;
+  const searchSyntaxPreview = useMemo(() => parseSearchSyntaxPreview(query), [query]);
   const trimmedQuery = query.trim();
+  const displayQuery = searchSyntaxPreview.pathQuery.trim();
+  const hasContentSearchSyntax = searchSyntaxPreview.hasContentSearch;
   const requestedIndexConfigKey = includeAllDrives
     ? `ALL:${includeFolders ? "1" : "0"}`
     : selectedDrive
@@ -1880,7 +2203,7 @@ function App() {
         return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
       }
 
-      const rankDiff = relevanceScore(right, trimmedQuery) - relevanceScore(left, trimmedQuery);
+      const rankDiff = relevanceScore(right, displayQuery) - relevanceScore(left, displayQuery);
       if (rankDiff !== 0) {
         return rankDiff;
       }
@@ -1894,7 +2217,7 @@ function App() {
     });
 
     return sorted;
-  }, [results, resultView, resultSort, trimmedQuery]);
+  }, [displayQuery, results, resultView, resultSort]);
 
   const visibleTotalBytes = useMemo(
     () => visibleResults.reduce((sum, result) => sum + result.size, 0),
@@ -2517,6 +2840,7 @@ function App() {
 
   useEffect(() => {
     if (!trimmedQuery && !hasFilters) {
+      cancelSearchRequest();
       setResults([]);
       setSearchError(null);
       setActionError(null);
@@ -2525,7 +2849,11 @@ function App() {
     }
 
     let active = true;
-    const debounceMs = hasMetadataFilters ? FILTER_SEARCH_DEBOUNCE_MS : SEARCH_DEBOUNCE_MS;
+    const debounceMs = hasContentSearchSyntax
+      ? CONTENT_SEARCH_DEBOUNCE_MS
+      : hasMetadataFilters
+        ? FILTER_SEARCH_DEBOUNCE_MS
+        : SEARCH_DEBOUNCE_MS;
     const timer = window.setTimeout(() => {
       const runSearch = async () => {
         setLoading(true);
@@ -2535,6 +2863,7 @@ function App() {
         const maxCreatedUnix = toUnixEnd(createdBefore);
 
         try {
+          cancelSearchRequest();
           const searchArgs = {
             query: trimmedQuery,
             extension: extension.trim(),
@@ -2573,6 +2902,7 @@ function App() {
     return () => {
       active = false;
       window.clearTimeout(timer);
+      cancelSearchRequest();
     };
   }, [
     trimmedQuery,
@@ -2582,6 +2912,7 @@ function App() {
     createdAfter,
     createdBefore,
     hasFilters,
+    hasContentSearchSyntax,
     hasMetadataFilters,
     searchLimit,
   ]);
@@ -2927,13 +3258,22 @@ function App() {
     }
   }
 
-  async function openResultPath(path: string): Promise<void> {
-    const parentPath = parentDirectoryFromPath(path);
-    if (!parentPath || parentPath === path) {
-      await revealResult(path);
+  async function openResultPath(result: SearchResult): Promise<void> {
+    const targetPath = result.isDirectory ? result.path : parentDirectoryFromPath(result.path);
+    if (!targetPath) {
+      await revealResult(result.path);
       return;
     }
-    await openResult(parentPath);
+    await openResult(targetPath);
+  }
+
+  async function openResultInConsole(result: SearchResult): Promise<void> {
+    try {
+      await invoke("open_path_in_console", { path: result.path });
+      setActionError(null);
+    } catch (error) {
+      setActionError(`Failed to open path in console: ${String(error)}`);
+    }
   }
 
   function openSearchResultContextMenu(
@@ -2947,9 +3287,6 @@ function App() {
 
     event.preventDefault();
     event.stopPropagation();
-    if (result.isDirectory) {
-      return;
-    }
     if (isQuickMode) {
       setSelectedResultKey(rowKey);
     }
@@ -2969,6 +3306,7 @@ function App() {
       path: result.path,
       currentName,
       nextName: currentName,
+      isDirectory: result.isDirectory,
     });
   }
 
@@ -2979,6 +3317,7 @@ function App() {
       rowKey,
       path: result.path,
       name: resultDisplayName(result),
+      isDirectory: result.isDirectory,
     });
   }
 
@@ -3129,7 +3468,7 @@ function App() {
       }
       setActionError(null);
     } catch (error) {
-      setActionError(`Failed to open file: ${String(error)}`);
+      setActionError(`Failed to open item: ${String(error)}`);
     }
   }
 
@@ -3200,6 +3539,33 @@ function App() {
     });
   }
 
+  function openSearchSyntaxHelp(sectionId?: string): void {
+    if (sectionId) {
+      setSearchSyntaxHelpSectionId(sectionId);
+    }
+    setActiveTab("syntax");
+  }
+
+  function applySearchSyntaxExample(example: string): void {
+    flushSync(() => {
+      setActiveTab("search");
+      setQuery(example);
+    });
+    window.requestAnimationFrame(() => {
+      const input = searchInputRef.current;
+      if (!input) {
+        return;
+      }
+      input.focus();
+      const caretPosition = input.value.length;
+      try {
+        input.setSelectionRange(caretPosition, caretPosition);
+      } catch {
+        // Ignore selection failures on unsupported input states.
+      }
+    });
+  }
+
   const statusText = status.indexing
     ? `Indexing ${status.indexedCount.toLocaleString()} items...`
     : indexSyncing
@@ -3238,11 +3604,7 @@ function App() {
   const selectedResultRowKey = selectedResult ? rowKeyForResult(selectedResult) : "";
   const selectedResultIsDirectory = selectedResult?.isDirectory ?? false;
   const selectedResultExtension = selectedResult ? normalizedExtension(selectedResult) : "";
-  const selectedResultShortType = selectedResult
-    ? selectedResultIsDirectory
-      ? "DIR"
-      : (selectedResultExtension || "file").slice(0, 2).toUpperCase()
-    : "??";
+  const selectedResultIconKind = selectedResult ? iconKindFromResult(selectedResult) : "file";
   const selectedResultExtensionLabel = selectedResult
     ? selectedResultIsDirectory
       ? "folder"
@@ -3271,6 +3633,14 @@ function App() {
       ? (selectedPreviewSources[selectedPreviewIndex] ?? "")
       : "";
   const hasSelectedPreview = selectedPreviewSrc.length > 0;
+  const activeSearchSyntaxHelpSection =
+    SEARCH_SYNTAX_HELP_SECTIONS.find((section) => section.id === searchSyntaxHelpSectionId) ??
+    SEARCH_SYNTAX_HELP_SECTIONS[0];
+  const contentSearchStatusMessage = hasContentSearchSyntax
+    ? "Searching file contents... hold on tight, this can take a few seconds."
+    : "Searching...";
+  const contentSearchWarningMessage =
+    "Content search reads matching files from disk. Pair it with ext:txt or other filters for the best speed.";
   const showQuickInlineSearching = isQuickMode && loading && hasSearchRequest;
   const showQuickEmptyState = isQuickMode && visibleResults.length === 0 && !showQuickInlineSearching;
   const quickPreviewEmptyTitle = searchError
@@ -3318,11 +3688,7 @@ function App() {
           )
         : [];
     const previewSrc = previewSources[0] ?? "";
-    const shortType = isQueryEntry
-      ? "Q"
-      : entry.isDirectory
-        ? "DIR"
-        : (normalizedExtension(entry) || "file").slice(0, 2).toUpperCase();
+    const iconKind = !isQueryEntry ? iconKindFromResult(entry) : null;
 
     const activateCard = () => {
       if (isQueryEntry) {
@@ -3349,10 +3715,10 @@ function App() {
         <div
           className={`result-preview recent-activity-preview ${isQueryEntry ? "query" : previewKind} ${
             !isQueryEntry && entry.isDirectory ? "folder" : ""
-          }`}
+          } ${iconKind ? `kind-${iconKind}` : ""}`}
           aria-hidden="true"
         >
-          {!isQueryEntry ? <span className="preview-fallback">{shortType}</span> : null}
+          {!isQueryEntry ? <ResultFallbackIcon result={entry} className="recent-activity-fallback-icon-shell" /> : null}
           {isQueryEntry ? (
             <span className="recent-activity-query-icon">
               <SearchLensIcon />
@@ -3417,18 +3783,18 @@ function App() {
             ) : null}
           </div>
           <div className={`header-tools ${isQuickMode ? "quick-header-tools" : ""}`}>
-            <button
-              type="button"
-              className="theme-toggle"
-              onClick={toggleThemeMode}
-              aria-label={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-              title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            >
-              <span className="theme-toggle-dot" aria-hidden="true" />
-              <span>{themeMode === "dark" ? "Light mode" : "Dark mode"}</span>
-            </button>
             {isQuickMode ? (
               <>
+                <button
+                  type="button"
+                  className="theme-toggle"
+                  onClick={toggleThemeMode}
+                  aria-label={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                  title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                >
+                  <span className="theme-toggle-dot" aria-hidden="true" />
+                  <span>{themeMode === "dark" ? "Light mode" : "Dark mode"}</span>
+                </button>
                 <span className="quick-index-indicator" title={`Current index scope: ${quickIndexScopeLabel}`}>
                   {quickIndexScopeLabel}
                 </span>
@@ -3551,6 +3917,15 @@ function App() {
             </button>
             <button
               type="button"
+              className={`tab ${activeTab === "syntax" ? "is-active" : ""}`}
+              onClick={() => {
+                openSearchSyntaxHelp();
+              }}
+            >
+              Syntax
+            </button>
+            <button
+              type="button"
               className={`tab ${activeTab === "about" ? "is-active" : ""}`}
               onClick={() => {
                 setActiveTab("about");
@@ -3587,6 +3962,9 @@ function App() {
 
             {visibleStatusError ? <p className="error-row">{visibleStatusError}</p> : null}
             {driveError ? <p className="error-row">{driveError}</p> : null}
+            {hasContentSearchSyntax ? (
+              <p className="warning-row">{contentSearchWarningMessage}</p>
+            ) : null}
 
             <div className={`search-input-shell ${isQuickMode ? "quick-search-input-shell" : ""}`}>
               <span className="search-input-icon" aria-hidden="true">
@@ -3614,6 +3992,7 @@ function App() {
                     event.preventDefault();
                   }}
                   onClick={() => {
+                    cancelSearchRequest();
                     setQuery("");
                     searchInputRef.current?.focus();
                   }}
@@ -3768,7 +4147,7 @@ function App() {
                 </div>
               </div>
 
-              {loading ? <p className="hint compact-hint">Searching...</p> : null}
+              {loading ? <p className="hint compact-hint">{contentSearchStatusMessage}</p> : null}
               {searchError ? <p className="error-row">{searchError}</p> : null}
               {actionError ? <p className="error-row">{actionError}</p> : null}
               {actionNotice ? <p className="info-row">{actionNotice}</p> : null}
@@ -3818,9 +4197,7 @@ function App() {
                       const rowKey = rowKeyForResult(result);
                       const isDirectory = result.isDirectory;
                       const normalizedExt = normalizedExtension(result);
-                      const shortType = isDirectory
-                        ? "DIR"
-                        : (normalizedExt || "file").slice(0, 2).toUpperCase();
+                      const iconKind = iconKindFromResult(result);
                       const extensionLabel = isDirectory
                         ? "folder"
                         : normalizedExt
@@ -3897,10 +4274,10 @@ function App() {
                         >
                           {showPreviews ? (
                             <div
-                              className={`result-preview ${previewKind} ${isDirectory ? "folder" : ""}`}
+                              className={`result-preview ${previewKind} ${isDirectory ? "folder" : ""} kind-${iconKind}`}
                               aria-hidden="true"
                             >
-                              <span className="preview-fallback">{shortType}</span>
+                              <ResultFallbackIcon result={result} className="preview-fallback-icon-shell" />
                               {hasRenderablePreview && previewKind === "image" ? (
                                 <img
                                   key={`${rowKey}:${activePreviewIndex}:image`}
@@ -3949,12 +4326,14 @@ function App() {
                               ) : null}
                             </div>
                           ) : (
-                            <div className={`result-icon ${isDirectory ? "folder" : ""}`}>{shortType}</div>
+                            <div className={`result-icon ${isDirectory ? "folder" : ""} kind-${iconKind}`} aria-hidden="true">
+                              <ResultTypeIcon kind={iconKind} className="result-icon-glyph" />
+                            </div>
                           )}
 
                           <div className="result-main">
-                            <strong>{highlightMatch(result.name, trimmedQuery)}</strong>
-                            <span>{highlightMatch(result.path, trimmedQuery)}</span>
+                            <strong>{highlightMatch(result.name, displayQuery)}</strong>
+                            <span>{highlightMatch(result.path, displayQuery)}</span>
                           </div>
                           <div className="result-meta">
                             <span className="meta-chip">{extensionLabel}</span>
@@ -4004,9 +4383,11 @@ function App() {
                       <div
                         className={`quick-preview-stage ${selectedPreviewKind} ${
                           selectedResultIsDirectory ? "folder" : ""
-                        }`}
+                        } kind-${selectedResultIconKind}`}
                       >
-                        <span className="preview-fallback">{selectedResultShortType}</span>
+                        <span className={`result-fallback-icon-shell kind-${selectedResultIconKind} quick-preview-fallback-icon-shell`} aria-hidden="true">
+                          <ResultTypeIcon kind={selectedResultIconKind} className="result-fallback-icon" />
+                        </span>
                         {hasSelectedPreview && selectedPreviewKind === "image" ? (
                           <img
                             key={`${selectedResultRowKey}:${selectedPreviewIndex}:image:quick`}
@@ -4822,9 +5203,21 @@ function App() {
                     light mode.
                   </p>
                 </div>
-                <span className="theme-mode-status">
-                  {themeMode === "dark" ? "Dark mode active" : "Light mode active"}
-                </span>
+                <div className="theme-header-tools">
+                  <span className="theme-mode-status">
+                    {themeMode === "dark" ? "Dark mode active" : "Light mode active"}
+                  </span>
+                  <button
+                    type="button"
+                    className="theme-toggle compact-theme-toggle"
+                    onClick={toggleThemeMode}
+                    aria-label={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                    title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                  >
+                    <span className="theme-toggle-dot" aria-hidden="true" />
+                    <span>{themeMode === "dark" ? "Light mode" : "Dark mode"}</span>
+                  </button>
+                </div>
               </div>
 
               <div className="advanced-settings">
@@ -4902,6 +5295,94 @@ function App() {
           </section>
         ) : null}
 
+        {activeTab === "syntax" ? (
+          <section className="tab-panel scrollable-tab-panel" aria-label="OmniSearch query syntax help">
+            <div className="about-panel advanced-panel syntax-help-page">
+              <div className="about-header">
+                <div>
+                  <h2>Search Syntax</h2>
+                  <p className="about-tagline">
+                    Only operators currently supported in OmniSearch are shown here.
+                  </p>
+                </div>
+                <span className="theme-mode-status">Examples jump back to Search</span>
+              </div>
+
+              <div className="syntax-help-layout syntax-help-layout-panel">
+                <aside className="syntax-help-sidebar" aria-label="Syntax topics">
+                  {SEARCH_SYNTAX_HELP_SECTIONS.map((section) => (
+                    <button
+                      key={section.id}
+                      type="button"
+                      className={`syntax-help-topic ${
+                        activeSearchSyntaxHelpSection.id === section.id ? "is-active" : ""
+                      }`}
+                      onClick={() => {
+                        setSearchSyntaxHelpSectionId(section.id);
+                      }}
+                    >
+                      <span className="syntax-help-topic-label">{section.label}</span>
+                      <small>{section.title}</small>
+                    </button>
+                  ))}
+                </aside>
+
+                <section className="syntax-help-body">
+                  <div className="syntax-help-body-header">
+                    <div>
+                      <strong>{activeSearchSyntaxHelpSection.title}</strong>
+                      <p>{activeSearchSyntaxHelpSection.summary}</p>
+                    </div>
+                    {activeSearchSyntaxHelpSection.syntax ? (
+                      <code className="syntax-help-code">{activeSearchSyntaxHelpSection.syntax}</code>
+                    ) : null}
+                  </div>
+
+                  <div className="syntax-help-section">
+                    <span className="syntax-help-section-label">How it works</span>
+                    <ul className="syntax-help-list">
+                      {activeSearchSyntaxHelpSection.details.map((detail) => (
+                        <li key={detail}>{detail}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="syntax-help-section">
+                    <span className="syntax-help-section-label">Examples</span>
+                    <div className="syntax-help-example-grid">
+                      {activeSearchSyntaxHelpSection.examples.map((example) => (
+                        <button
+                          key={example}
+                          type="button"
+                          className="syntax-help-example"
+                          onClick={() => {
+                            applySearchSyntaxExample(example);
+                          }}
+                          title="Use this example in the search box"
+                        >
+                          <code>{example}</code>
+                          <span>Use example</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {activeSearchSyntaxHelpSection.notes?.length ? (
+                    <div className="syntax-help-section">
+                      <span className="syntax-help-section-label">Notes</span>
+                      <ul className="syntax-help-list is-notes">
+                        {activeSearchSyntaxHelpSection.notes.map((note) => (
+                          <li key={note}>{note}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </section>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
         {activeTab === "about" ? (
           <section className="tab-panel scrollable-tab-panel" aria-label="About OmniSearch and developer">
             <div className="about-panel about-panel-flat">
@@ -4961,7 +5442,10 @@ function App() {
                   </button>
                 </section>
 
-                <section className="about-apps-section" aria-label="More apps by Eyuel">
+                <section
+                  className="about-apps-section about-apps-section-flat"
+                  aria-label="More apps by Eyuel"
+                >
                   <div className="about-section-heading">
                     <h3>More Apps by Eyuel Engida</h3>
                     <p>Other desktop apps.</p>
@@ -5014,33 +5498,49 @@ function App() {
             onClick={(event) => {
               event.stopPropagation();
             }}
-          >
-            <button
-              type="button"
-              className="result-context-menu-item"
-              role="menuitem"
-              onClick={() => {
-                closeSearchResultContextMenu();
-                void openResult(activeSearchResultMenu.path);
-              }}
             >
-              Open file
-            </button>
-            <button
-              type="button"
-              className="result-context-menu-item"
-              role="menuitem"
+              <button
+                type="button"
+                className="result-context-menu-item"
+                role="menuitem"
               onClick={() => {
-                closeSearchResultContextMenu();
-                void openResultPath(activeSearchResultMenu.path);
-              }}
-            >
-              Open path
-            </button>
-            <button
-              type="button"
-              className="result-context-menu-item"
-              role="menuitem"
+                  closeSearchResultContextMenu();
+                  void openResult(activeSearchResultMenu.path);
+                }}
+              >
+                {activeSearchResultMenu.isDirectory ? "Open folder" : "Open file"}
+              </button>
+              {!activeSearchResultMenu.isDirectory ? (
+                <button
+                  type="button"
+                  className="result-context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeSearchResultContextMenu();
+                    void openResultPath(activeSearchResultMenu);
+                  }}
+                >
+                  Open containing folder
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="result-context-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  closeSearchResultContextMenu();
+                  void openResultInConsole(activeSearchResultMenu);
+                }}
+              >
+                <span className="result-context-menu-item-icon" aria-hidden="true">
+                  <ConsoleIcon />
+                </span>
+                <span className="result-context-menu-item-label">Open path in console</span>
+              </button>
+              <button
+                type="button"
+                className="result-context-menu-item"
+                role="menuitem"
               onClick={() => {
                 openSearchResultRename(activeSearchResultMenu, searchResultContextMenu.rowKey);
               }}
@@ -5061,31 +5561,47 @@ function App() {
             >
               Copy path
             </button>
-            <button
-              type="button"
-              className="result-context-menu-item"
-              role="menuitem"
-              onClick={() => {
-                closeSearchResultContextMenu();
-                void handleSearchResultCopy(
-                  resultFilenameWithoutExtension(activeSearchResultMenu),
-                  "filename",
-                );
-              }}
-            >
-              Copy filename
-            </button>
-            <button
-              type="button"
-              className="result-context-menu-item"
-              role="menuitem"
-              onClick={() => {
-                closeSearchResultContextMenu();
-                void handleSearchResultCopy(resultDisplayName(activeSearchResultMenu), "full filename");
-              }}
-            >
-              Copy filename + extension
-            </button>
+            {activeSearchResultMenu.isDirectory ? (
+              <button
+                type="button"
+                className="result-context-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  closeSearchResultContextMenu();
+                  void handleSearchResultCopy(resultDisplayName(activeSearchResultMenu), "folder name");
+                }}
+              >
+                Copy folder name
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="result-context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeSearchResultContextMenu();
+                    void handleSearchResultCopy(
+                      resultFilenameWithoutExtension(activeSearchResultMenu),
+                      "filename",
+                    );
+                  }}
+                >
+                  Copy filename
+                </button>
+                <button
+                  type="button"
+                  className="result-context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeSearchResultContextMenu();
+                    void handleSearchResultCopy(resultDisplayName(activeSearchResultMenu), "full filename");
+                  }}
+                >
+                  Copy filename + extension
+                </button>
+              </>
+            )}
 
             <div className="result-context-menu-divider" />
 
@@ -5119,7 +5635,7 @@ function App() {
                 event.stopPropagation();
               }}
             >
-              <h3>Rename file</h3>
+              <h3>{searchResultRenameDraft.isDirectory ? "Rename folder" : "Rename file"}</h3>
               <p>{searchResultRenameDraft.currentName}</p>
               <p className="modal-path">{searchResultRenameDraft.path}</p>
 
@@ -5200,7 +5716,7 @@ function App() {
                 event.stopPropagation();
               }}
             >
-              <h3>Delete file?</h3>
+              <h3>{searchResultDeleteCandidate.isDirectory ? "Delete folder?" : "Delete file?"}</h3>
               <p>{searchResultDeleteCandidate.name}</p>
               <p className="modal-path">{searchResultDeleteCandidate.path}</p>
               <label className="modal-checkbox-option">

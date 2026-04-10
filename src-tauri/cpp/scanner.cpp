@@ -67,6 +67,25 @@ struct SearchRow {
   bool is_directory;
 };
 
+enum class ContentSearchMode {
+  None,
+  Auto,
+  Ansi,
+  Utf8,
+  Utf16,
+  Utf16Be,
+};
+
+struct ParsedSearchQuery {
+  std::wstring path_query;
+  std::wstring path_query_lower;
+  std::unordered_set<std::wstring> extension_filters;
+  std::wstring content_query;
+  std::wstring content_query_lower;
+  ContentSearchMode content_mode = ContentSearchMode::None;
+  bool has_content_filter = false;
+};
+
 
 
 struct DuplicateFileRow {
@@ -109,6 +128,7 @@ std::atomic<uint64_t> g_indexing_request_token{0};
 std::atomic<uint64_t> g_live_watcher_token{0};
 std::atomic<bool> g_duplicate_scan_running{false};
 std::atomic<bool> g_duplicate_cancel_requested{false};
+std::atomic<uint64_t> g_search_request_token{0};
 std::atomic<uint64_t> g_duplicate_progress_done{0};
 std::atomic<uint64_t> g_duplicate_progress_total{0};
 std::atomic<uint64_t> g_duplicate_groups_found{0};
@@ -267,6 +287,13 @@ bool IsIndexingCancelled(const uint64_t request_token) {
 
 bool IsDuplicateScanCancelRequested() {
   return g_duplicate_cancel_requested.load(std::memory_order_acquire);
+}
+
+bool IsSearchCancelled(const uint64_t request_token) {
+  if (request_token == 0) {
+    return false;
+  }
+  return g_search_request_token.load(std::memory_order_acquire) != request_token;
 }
 
 void ResetDuplicateProgress() {
@@ -433,6 +460,591 @@ bool ContainsCaseInsensitive(const std::wstring& text, const std::wstring& needl
     }
   }
   return false;
+}
+
+std::wstring TrimWhitespace(const std::wstring& value) {
+  size_t start = 0;
+  while (start < value.size() && std::iswspace(value[start])) {
+    ++start;
+  }
+
+  size_t end = value.size();
+  while (end > start && std::iswspace(value[end - 1])) {
+    --end;
+  }
+
+  return value.substr(start, end - start);
+}
+
+std::wstring CollapseWhitespace(const std::wstring& value) {
+  std::wstring collapsed;
+  collapsed.reserve(value.size());
+  bool previous_was_space = false;
+  for (const wchar_t ch : value) {
+    if (std::iswspace(ch)) {
+      if (!previous_was_space) {
+        collapsed.push_back(L' ');
+        previous_was_space = true;
+      }
+      continue;
+    }
+    previous_was_space = false;
+    collapsed.push_back(ch);
+  }
+  return TrimWhitespace(collapsed);
+}
+
+bool IsDirectoryExtensionAlias(const std::wstring& value) {
+  return value == L"folder" || value == L"folders" || value == L"dir" ||
+         value == L"directory";
+}
+
+std::wstring NormalizeExtensionValue(std::wstring value) {
+  value = ToLower(TrimWhitespace(value));
+  while (!value.empty() && value.front() == L'.') {
+    value.erase(value.begin());
+  }
+  return value;
+}
+
+bool IsSearchSyntaxBoundary(const std::wstring& value, const size_t index) {
+  return index == 0 || std::iswspace(value[index - 1]);
+}
+
+bool ParseSearchSyntaxValue(const std::wstring& raw_query, const size_t start,
+                            std::wstring* value, size_t* consumed_end) {
+  size_t cursor = start;
+  while (cursor < raw_query.size() && std::iswspace(raw_query[cursor])) {
+    ++cursor;
+  }
+  if (cursor >= raw_query.size()) {
+    return false;
+  }
+
+  if (raw_query[cursor] == L'"') {
+    const size_t value_start = cursor + 1;
+    const size_t closing_quote = raw_query.find(L'"', value_start);
+    if (closing_quote == std::wstring::npos) {
+      *value = raw_query.substr(value_start);
+      *consumed_end = raw_query.size();
+      return !TrimWhitespace(*value).empty();
+    }
+    *value = raw_query.substr(value_start, closing_quote - value_start);
+    *consumed_end = closing_quote + 1;
+    return !TrimWhitespace(*value).empty();
+  }
+
+  size_t value_end = cursor;
+  while (value_end < raw_query.size() && !std::iswspace(raw_query[value_end])) {
+    ++value_end;
+  }
+  *value = raw_query.substr(cursor, value_end - cursor);
+  *consumed_end = value_end;
+  return !TrimWhitespace(*value).empty();
+}
+
+void AppendExtensionFilters(const std::wstring& extension_list,
+                            std::unordered_set<std::wstring>* filters) {
+  size_t start = 0;
+  while (start <= extension_list.size()) {
+    const size_t delimiter = extension_list.find(L';', start);
+    const size_t end =
+        delimiter == std::wstring::npos ? extension_list.size() : delimiter;
+    std::wstring normalized =
+        NormalizeExtensionValue(extension_list.substr(start, end - start));
+    if (!normalized.empty()) {
+      filters->insert(std::move(normalized));
+    }
+    if (delimiter == std::wstring::npos) {
+      break;
+    }
+    start = delimiter + 1;
+  }
+}
+
+bool TryConsumeSearchSyntax(const std::wstring& raw_query,
+                            const std::wstring& lower_query, const size_t index,
+                            ParsedSearchQuery* parsed, size_t* consumed_end) {
+  if (!IsSearchSyntaxBoundary(raw_query, index)) {
+    return false;
+  }
+
+  struct SearchSyntaxToken {
+    const wchar_t* prefix;
+    ContentSearchMode content_mode;
+    bool is_extension_filter;
+  };
+
+  static constexpr SearchSyntaxToken kTokens[] = {
+      {L"utf16becontent:", ContentSearchMode::Utf16Be, false},
+      {L"utf16content:", ContentSearchMode::Utf16, false},
+      {L"utf8content:", ContentSearchMode::Utf8, false},
+      {L"ansicontent:", ContentSearchMode::Ansi, false},
+      {L"content:", ContentSearchMode::Auto, false},
+      {L"ext:", ContentSearchMode::None, true},
+  };
+
+  for (const SearchSyntaxToken& token : kTokens) {
+    const size_t prefix_len = std::wcslen(token.prefix);
+    if (lower_query.compare(index, prefix_len, token.prefix) != 0) {
+      continue;
+    }
+
+    std::wstring value;
+    size_t token_end = index;
+    if (!ParseSearchSyntaxValue(raw_query, index + prefix_len, &value, &token_end)) {
+      return false;
+    }
+
+    if (token.is_extension_filter) {
+      AppendExtensionFilters(value, &parsed->extension_filters);
+    } else {
+      parsed->content_query = TrimWhitespace(value);
+      parsed->content_query_lower = ToLower(parsed->content_query);
+      parsed->content_mode = token.content_mode;
+      parsed->has_content_filter = !parsed->content_query_lower.empty();
+    }
+
+    *consumed_end = token_end;
+    return true;
+  }
+
+  return false;
+}
+
+ParsedSearchQuery ParseSearchQuery(const std::wstring& raw_query) {
+  ParsedSearchQuery parsed;
+  const std::wstring lower_query = ToLower(raw_query);
+  std::wstring residual_query;
+  residual_query.reserve(raw_query.size());
+
+  size_t cursor = 0;
+  while (cursor < raw_query.size()) {
+    size_t consumed_end = cursor;
+    if (TryConsumeSearchSyntax(raw_query, lower_query, cursor, &parsed, &consumed_end)) {
+      cursor = consumed_end;
+      continue;
+    }
+
+    residual_query.push_back(raw_query[cursor]);
+    ++cursor;
+  }
+
+  parsed.path_query = CollapseWhitespace(residual_query);
+  parsed.path_query_lower = ToLower(parsed.path_query);
+  return parsed;
+}
+
+bool MatchesLowercaseNeedle(std::wstring* overlap_lower,
+                            std::wstring decoded_chunk,
+                            const std::wstring& needle_lower) {
+  if (needle_lower.empty()) {
+    return true;
+  }
+
+  decoded_chunk = ToLower(std::move(decoded_chunk));
+
+  std::wstring combined;
+  combined.reserve(overlap_lower->size() + decoded_chunk.size());
+  combined.append(*overlap_lower);
+  combined.append(decoded_chunk);
+  if (combined.find(needle_lower) != std::wstring::npos) {
+    return true;
+  }
+
+  const size_t keep_chars = needle_lower.size() > 1 ? needle_lower.size() - 1 : 0;
+  if (keep_chars == 0) {
+    overlap_lower->clear();
+  } else if (combined.size() > keep_chars) {
+    *overlap_lower = combined.substr(combined.size() - keep_chars);
+  } else {
+    *overlap_lower = std::move(combined);
+  }
+
+  return false;
+}
+
+bool ResetFileCursor(HANDLE file) {
+  LARGE_INTEGER origin{};
+  return SetFilePointerEx(file, origin, nullptr, FILE_BEGIN) != FALSE;
+}
+
+std::wstring DecodeBytesWithCodePage(const char* bytes, const int len,
+                                     const UINT code_page) {
+  if (bytes == nullptr || len <= 0) {
+    return L"";
+  }
+
+  const int required =
+      MultiByteToWideChar(code_page, 0, bytes, len, nullptr, 0);
+  if (required <= 0) {
+    return L"";
+  }
+
+  std::wstring decoded(static_cast<size_t>(required), L'\0');
+  MultiByteToWideChar(code_page, 0, bytes, len, decoded.data(), required);
+  return decoded;
+}
+
+size_t Utf8TrailingCarryLength(const BYTE* bytes, const size_t len) {
+  if (bytes == nullptr || len == 0) {
+    return 0;
+  }
+
+  size_t continuation_count = 0;
+  size_t cursor = len;
+  while (continuation_count < 3 && cursor > 0 &&
+         (bytes[cursor - 1] & 0xC0) == 0x80) {
+    ++continuation_count;
+    --cursor;
+  }
+
+  if (continuation_count == 0) {
+    const BYTE last = bytes[len - 1];
+    if ((last & 0x80) == 0x00) {
+      return 0;
+    }
+    if ((last & 0xE0) == 0xC0 || (last & 0xF0) == 0xE0 ||
+        (last & 0xF8) == 0xF0) {
+      return 1;
+    }
+    return 0;
+  }
+
+  if (cursor == 0) {
+    return std::min<size_t>(len, 3);
+  }
+
+  const BYTE lead = bytes[cursor - 1];
+  size_t expected_len = 0;
+  if ((lead & 0xE0) == 0xC0) {
+    expected_len = 2;
+  } else if ((lead & 0xF0) == 0xE0) {
+    expected_len = 3;
+  } else if ((lead & 0xF8) == 0xF0) {
+    expected_len = 4;
+  } else {
+    return 0;
+  }
+
+  const size_t available_len = len - (cursor - 1);
+  return available_len < expected_len ? available_len : 0;
+}
+
+std::wstring DecodeUtf16Bytes(const BYTE* bytes, const size_t len,
+                              const bool big_endian) {
+  if (bytes == nullptr || len < 2) {
+    return L"";
+  }
+
+  const size_t code_units = len / 2;
+  std::wstring decoded(code_units, L'\0');
+  for (size_t i = 0; i < code_units; ++i) {
+    const uint16_t value = big_endian
+                               ? (static_cast<uint16_t>(bytes[i * 2]) << 8) |
+                                     static_cast<uint16_t>(bytes[i * 2 + 1])
+                               : static_cast<uint16_t>(bytes[i * 2]) |
+                                     (static_cast<uint16_t>(bytes[i * 2 + 1])
+                                      << 8);
+    decoded[i] = static_cast<wchar_t>(value);
+  }
+  return decoded;
+}
+
+bool SearchFileHandleAnsi(HANDLE file, const std::wstring& needle_lower,
+                          const uint64_t request_token) {
+  if (!ResetFileCursor(file)) {
+    return false;
+  }
+
+  constexpr DWORD kChunkBytes = 256 * 1024;
+  thread_local std::vector<BYTE> buffer;
+  if (buffer.size() != kChunkBytes) {
+    buffer.resize(kChunkBytes);
+  }
+
+  std::wstring overlap_lower;
+  while (true) {
+    if (IsSearchCancelled(request_token)) {
+      return false;
+    }
+
+    DWORD bytes_read = 0;
+    if (ReadFile(file, buffer.data(), kChunkBytes, &bytes_read, nullptr) == FALSE) {
+      return false;
+    }
+    if (bytes_read == 0) {
+      return false;
+    }
+
+    std::wstring decoded = DecodeBytesWithCodePage(
+        reinterpret_cast<const char*>(buffer.data()), static_cast<int>(bytes_read),
+        CP_ACP);
+    if (MatchesLowercaseNeedle(&overlap_lower, std::move(decoded), needle_lower)) {
+      return true;
+    }
+  }
+}
+
+bool SearchFileHandleUtf8(HANDLE file, const std::wstring& needle_lower,
+                          const uint64_t request_token) {
+  if (!ResetFileCursor(file)) {
+    return false;
+  }
+
+  constexpr DWORD kChunkBytes = 256 * 1024;
+  thread_local std::vector<BYTE> buffer;
+  if (buffer.size() != kChunkBytes) {
+    buffer.resize(kChunkBytes);
+  }
+
+  std::string carry;
+  std::wstring overlap_lower;
+  bool first_chunk = true;
+
+  while (true) {
+    if (IsSearchCancelled(request_token)) {
+      return false;
+    }
+
+    DWORD bytes_read = 0;
+    if (ReadFile(file, buffer.data(), kChunkBytes, &bytes_read, nullptr) == FALSE) {
+      return false;
+    }
+    if (bytes_read == 0) {
+      break;
+    }
+
+    std::string combined;
+    combined.reserve(carry.size() + static_cast<size_t>(bytes_read));
+    combined.append(carry);
+    combined.append(reinterpret_cast<const char*>(buffer.data()),
+                    static_cast<size_t>(bytes_read));
+
+    const size_t carry_len = Utf8TrailingCarryLength(
+        reinterpret_cast<const BYTE*>(combined.data()), combined.size());
+    const size_t decode_len = combined.size() - carry_len;
+    carry.assign(combined.data() + decode_len, carry_len);
+
+    std::wstring decoded =
+        DecodeBytesWithCodePage(combined.data(), static_cast<int>(decode_len), CP_UTF8);
+    if (first_chunk && !decoded.empty() && decoded.front() == 0xFEFF) {
+      decoded.erase(decoded.begin());
+    }
+    if (MatchesLowercaseNeedle(&overlap_lower, std::move(decoded), needle_lower)) {
+      return true;
+    }
+    first_chunk = false;
+  }
+
+  if (!carry.empty()) {
+    std::wstring decoded =
+        DecodeBytesWithCodePage(carry.data(), static_cast<int>(carry.size()), CP_UTF8);
+    if (first_chunk && !decoded.empty() && decoded.front() == 0xFEFF) {
+      decoded.erase(decoded.begin());
+    }
+    if (MatchesLowercaseNeedle(&overlap_lower, std::move(decoded), needle_lower)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool SearchFileHandleUtf16(HANDLE file, const std::wstring& needle_lower,
+                           const bool big_endian,
+                           const uint64_t request_token) {
+  if (!ResetFileCursor(file)) {
+    return false;
+  }
+
+  constexpr DWORD kChunkBytes = 256 * 1024;
+  thread_local std::vector<BYTE> buffer;
+  if (buffer.size() != kChunkBytes) {
+    buffer.resize(kChunkBytes);
+  }
+
+  std::vector<BYTE> carry;
+  std::wstring overlap_lower;
+  bool first_chunk = true;
+
+  while (true) {
+    if (IsSearchCancelled(request_token)) {
+      return false;
+    }
+
+    DWORD bytes_read = 0;
+    if (ReadFile(file, buffer.data(), kChunkBytes, &bytes_read, nullptr) == FALSE) {
+      return false;
+    }
+    if (bytes_read == 0) {
+      break;
+    }
+
+    std::vector<BYTE> combined;
+    combined.reserve(carry.size() + static_cast<size_t>(bytes_read));
+    combined.insert(combined.end(), carry.begin(), carry.end());
+    combined.insert(combined.end(), buffer.begin(), buffer.begin() + bytes_read);
+
+    const size_t carry_len = combined.size() % 2;
+    const size_t decode_len = combined.size() - carry_len;
+    carry.assign(combined.end() - static_cast<std::ptrdiff_t>(carry_len),
+                 combined.end());
+
+    std::wstring decoded =
+        DecodeUtf16Bytes(combined.data(), decode_len, big_endian);
+    if (first_chunk && !decoded.empty() && decoded.front() == 0xFEFF) {
+      decoded.erase(decoded.begin());
+    }
+    if (MatchesLowercaseNeedle(&overlap_lower, std::move(decoded), needle_lower)) {
+      return true;
+    }
+    first_chunk = false;
+  }
+
+  return false;
+}
+
+enum class AutoContentMode {
+  Binary,
+  Utf8,
+  Utf16,
+  Utf16Be,
+};
+
+AutoContentMode DetectAutoContentMode(const BYTE* bytes, const size_t len) {
+  if (bytes == nullptr || len == 0) {
+    return AutoContentMode::Utf8;
+  }
+
+  if (len >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+    return AutoContentMode::Utf8;
+  }
+  if (len >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+    return AutoContentMode::Utf16;
+  }
+  if (len >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+    return AutoContentMode::Utf16Be;
+  }
+
+  size_t even_nulls = 0;
+  size_t odd_nulls = 0;
+  size_t suspicious_controls = 0;
+  for (size_t i = 0; i < len; ++i) {
+    const BYTE value = bytes[i];
+    if (value == 0) {
+      if ((i % 2) == 0) {
+        ++even_nulls;
+      } else {
+        ++odd_nulls;
+      }
+      continue;
+    }
+    if ((value < 0x09) || (value > 0x0D && value < 0x20)) {
+      ++suspicious_controls;
+    }
+  }
+
+  if (odd_nulls >= std::max<size_t>(4, len / 8) && even_nulls * 4 <= odd_nulls) {
+    return AutoContentMode::Utf16;
+  }
+  if (even_nulls >= std::max<size_t>(4, len / 8) && odd_nulls * 4 <= even_nulls) {
+    return AutoContentMode::Utf16Be;
+  }
+  if (even_nulls + odd_nulls >= std::max<size_t>(8, len / 10)) {
+    return AutoContentMode::Binary;
+  }
+  if (suspicious_controls * 5 > len) {
+    return AutoContentMode::Binary;
+  }
+
+  return AutoContentMode::Utf8;
+}
+
+bool SearchFileContent(const std::wstring& path, const std::wstring& needle_lower,
+                       const ContentSearchMode mode,
+                       const uint64_t request_token) {
+  if (needle_lower.empty()) {
+    return true;
+  }
+
+  if (IsSearchCancelled(request_token)) {
+    return false;
+  }
+
+  HANDLE file = CreateFileW(
+      path.c_str(), GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+
+  bool matched = false;
+  if (mode == ContentSearchMode::Auto) {
+    BYTE probe[4096];
+    DWORD probe_read = 0;
+    if (ReadFile(file, probe, static_cast<DWORD>(sizeof(probe)), &probe_read, nullptr) ==
+        FALSE) {
+      CloseHandle(file);
+      return false;
+    }
+
+    if (IsSearchCancelled(request_token)) {
+      CloseHandle(file);
+      return false;
+    }
+
+    switch (DetectAutoContentMode(probe, probe_read)) {
+      case AutoContentMode::Utf16:
+        matched = SearchFileHandleUtf16(file, needle_lower, false, request_token);
+        break;
+      case AutoContentMode::Utf16Be:
+        matched = SearchFileHandleUtf16(file, needle_lower, true, request_token);
+        break;
+      case AutoContentMode::Binary:
+        matched = false;
+        break;
+      case AutoContentMode::Utf8:
+      default:
+        matched = SearchFileHandleUtf8(file, needle_lower, request_token);
+        if (!matched) {
+          matched = SearchFileHandleAnsi(file, needle_lower, request_token);
+        }
+        break;
+    }
+  } else if (mode == ContentSearchMode::Ansi) {
+    matched = SearchFileHandleAnsi(file, needle_lower, request_token);
+  } else if (mode == ContentSearchMode::Utf8) {
+    matched = SearchFileHandleUtf8(file, needle_lower, request_token);
+  } else if (mode == ContentSearchMode::Utf16) {
+    matched = SearchFileHandleUtf16(file, needle_lower, false, request_token);
+  } else if (mode == ContentSearchMode::Utf16Be) {
+    matched = SearchFileHandleUtf16(file, needle_lower, true, request_token);
+  }
+
+  CloseHandle(file);
+  return matched;
+}
+
+bool MatchesQueryExtensionFilters(
+    const IndexedFile& file,
+    const std::unordered_set<std::wstring>& extension_filters) {
+  if (extension_filters.empty()) {
+    return true;
+  }
+
+  if (file.is_directory) {
+    for (const std::wstring& filter : extension_filters) {
+      if (IsDirectoryExtensionAlias(filter)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  return extension_filters.find(IndexedFileExtensionLower(file)) !=
+         extension_filters.end();
 }
 
 
@@ -2242,10 +2854,13 @@ extern "C" __declspec(dllexport) char* omni_search_files_json(
     const char* query_utf8, const char* extension_utf8, uint64_t min_size,
     uint64_t max_size, int64_t min_created_unix, int64_t max_created_unix,
     uint32_t requested_limit) {
+  const uint64_t request_token =
+      g_search_request_token.fetch_add(1, std::memory_order_acq_rel) + 1;
   const uint32_t limit =
       (requested_limit == 0) ? 200 : std::min<uint32_t>(requested_limit, 5000);
-  const std::wstring query =
-      ToLower(Utf8ToWide(query_utf8 == nullptr ? "" : query_utf8));
+  const ParsedSearchQuery parsed_query =
+      ParseSearchQuery(Utf8ToWide(query_utf8 == nullptr ? "" : query_utf8));
+  const std::wstring& query = parsed_query.path_query_lower;
   const std::wstring extension_filter = NormalizeExtensionFilter(extension_utf8);
   const bool has_extension_filter = !extension_filter.empty();
   const bool extension_targets_directories =
@@ -2259,7 +2874,8 @@ extern "C" __declspec(dllexport) char* omni_search_files_json(
   const bool requires_metadata = has_size_filter || has_date_filter;
   const bool distribute_across_drives =
       g_scan_all_drives_mode.load(std::memory_order_acquire) && limit > 1 &&
-      query.empty() && (has_extension_filter || has_size_filter || has_date_filter);
+      query.empty() && !parsed_query.has_content_filter &&
+      (has_extension_filter || has_size_filter || has_date_filter);
 
 
   std::vector<SearchRow> rows;
@@ -2275,7 +2891,13 @@ extern "C" __declspec(dllexport) char* omni_search_files_json(
   {
     std::shared_lock<std::shared_mutex> lock(g_index_mutex);
     for (const IndexedFile& file : g_indexed_files) {
+      if (IsSearchCancelled(request_token)) {
+        return HeapCopyString("[]");
+      }
       if (!ContainsCaseInsensitive(file.path, query)) {
+        continue;
+      }
+      if (!MatchesQueryExtensionFilters(file, parsed_query.extension_filters)) {
         continue;
       }
       if (has_extension_filter) {
@@ -2292,14 +2914,14 @@ extern "C" __declspec(dllexport) char* omni_search_files_json(
       uint64_t size = 0;
       int64_t created = 0;
       int64_t modified = 0;
-      bool metadata_loaded =
-          ReadFileMetadata(file.path, &size, &created, &modified);
-      if (!metadata_loaded && IsPathMissingError(GetLastError())) {
-        // Skip stale entries for files that were deleted or moved.
-        continue;
-      }
+      bool metadata_loaded = false;
 
       if (requires_metadata) {
+        metadata_loaded = ReadFileMetadata(file.path, &size, &created, &modified);
+        if (!metadata_loaded && IsPathMissingError(GetLastError())) {
+          // Skip stale entries for files that were deleted or moved.
+          continue;
+        }
         if (!metadata_loaded) {
           continue;
         }
@@ -2307,6 +2929,26 @@ extern "C" __declspec(dllexport) char* omni_search_files_json(
           continue;
         }
         if (created < min_created_unix || created > max_created_unix) {
+          continue;
+        }
+      }
+
+      if (parsed_query.has_content_filter) {
+        if (file.is_directory) {
+          continue;
+        }
+        if (!SearchFileContent(file.path, parsed_query.content_query_lower,
+                               parsed_query.content_mode, request_token)) {
+          if (IsSearchCancelled(request_token)) {
+            return HeapCopyString("[]");
+          }
+          continue;
+        }
+      }
+
+      if (!metadata_loaded) {
+        metadata_loaded = ReadFileMetadata(file.path, &size, &created, &modified);
+        if (!metadata_loaded && IsPathMissingError(GetLastError())) {
           continue;
         }
       }
@@ -2344,13 +2986,16 @@ if (distribute_across_drives) {
       }
     }
   }
-if (distribute_across_drives) {
+  if (distribute_across_drives) {
 
     rows.clear();
     rows.reserve(limit);
     std::vector<size_t> bucket_offsets(drive_order.size(), 0);
     bool appended = true;
     while (rows.size() < limit && appended) {
+      if (IsSearchCancelled(request_token)) {
+        return HeapCopyString("[]");
+      }
       appended = false;
       for (size_t i = 0; i < drive_order.size(); ++i) {
         std::vector<SearchRow>& bucket = drive_buckets[drive_order[i]];
@@ -2374,6 +3019,11 @@ if (distribute_across_drives) {
     SetLastErrorText("Failed to allocate result buffer.");
   }
   return out;
+}
+
+extern "C" __declspec(dllexport) bool omni_cancel_search() {
+  g_search_request_token.fetch_add(1, std::memory_order_acq_rel);
+  return true;
 }
 
 extern "C" __declspec(dllexport) char* omni_find_duplicates_json(

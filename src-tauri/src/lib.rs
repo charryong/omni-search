@@ -176,6 +176,7 @@ unsafe extern "C" {
         max_created_unix: i64,
         limit: u32,
     ) -> *mut c_char;
+    fn omni_cancel_search() -> bool;
     fn omni_find_duplicates_json(
         min_size: u64,
         max_groups: u32,
@@ -334,6 +335,21 @@ async fn search_files(
             max_created_unix,
             limit,
         );
+        Err("OmniSearch scanner is only supported on Windows.".to_string())
+    }
+}
+
+#[tauri::command]
+fn cancel_search() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // SAFETY: FFI call only advances the search cancellation token.
+        let cancelled = unsafe { omni_cancel_search() };
+        Ok(cancelled)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
         Err("OmniSearch scanner is only supported on Windows.".to_string())
     }
 }
@@ -567,6 +583,46 @@ fn reveal_in_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_path_in_console(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::{os::windows::process::CommandExt, path::PathBuf, process::Command};
+        use windows::Win32::System::Threading::CREATE_NEW_CONSOLE;
+
+        let requested_path = PathBuf::from(path);
+        if !requested_path.exists() {
+            return Err("Path does not exist on disk.".to_string());
+        }
+
+        let target_directory = if requested_path.is_dir() {
+            requested_path
+        } else {
+            requested_path.parent().map(std::path::Path::to_path_buf).ok_or_else(|| {
+                "Failed to resolve the parent folder for the requested path.".to_string()
+            })?
+        };
+
+        if !target_directory.is_dir() {
+            return Err("Resolved console target is not a directory.".to_string());
+        }
+
+        Command::new("cmd.exe")
+            .creation_flags(CREATE_NEW_CONSOLE.0)
+            .current_dir(&target_directory)
+            .spawn()
+            .map_err(|err| format!("Failed to open a console for the selected path: {err}"))?;
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Err("Opening a console for a path is only supported on Windows.".to_string())
+    }
+}
+
+#[tauri::command]
 fn start_native_file_drag(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -756,6 +812,7 @@ pub fn run() {
             start_indexing,
             index_status,
             search_files,
+            cancel_search,
             find_duplicate_groups,
             duplicate_scan_status,
             cancel_duplicate_scan,
@@ -764,6 +821,7 @@ pub fn run() {
             list_drives,
             open_file,
             reveal_in_folder,
+            open_path_in_console,
             start_native_file_drag,
             open_external_url,
             load_preview_data_url,
