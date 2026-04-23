@@ -26,8 +26,6 @@ use windows::{
 };
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-mod apps;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod desktop;
 
 #[derive(Debug, Serialize)]
@@ -164,6 +162,7 @@ unsafe extern "C" {
         drive_utf8: *const c_char,
         include_directories: bool,
         scan_all_drives: bool,
+        include_hidden: bool,
     ) -> bool;
     fn omni_is_indexing() -> bool;
     fn omni_is_index_ready() -> bool;
@@ -240,16 +239,19 @@ fn start_indexing(
     #[allow(non_snake_case)] includeFolders: Option<bool>,
     include_all_drives: Option<bool>,
     #[allow(non_snake_case)] includeAllDrives: Option<bool>,
+    include_hidden: Option<bool>,
+    #[allow(non_snake_case)] includeHidden: Option<bool>,
 ) -> Result<IndexStatus, String> {
     #[cfg(target_os = "windows")]
     {
         let drive = drive.unwrap_or_else(|| "C".to_string());
         let include_folders = include_folders.or(includeFolders).unwrap_or(false);
         let include_all_drives = include_all_drives.or(includeAllDrives).unwrap_or(false);
+        let include_hidden = include_hidden.or(includeHidden).unwrap_or(false);
         let c_drive = CString::new(drive).map_err(|_| "Invalid drive parameter".to_string())?;
         // SAFETY: `c_drive` lives long enough for this synchronous call.
         let started =
-            unsafe { omni_start_indexing(c_drive.as_ptr(), include_folders, include_all_drives) };
+            unsafe { omni_start_indexing(c_drive.as_ptr(), include_folders, include_all_drives, include_hidden) };
         if !started {
             return Err(read_last_error().unwrap_or_else(|| "Failed to start indexing".to_string()));
         }
@@ -264,6 +266,8 @@ fn start_indexing(
             includeFolders,
             include_all_drives,
             includeAllDrives,
+            include_hidden,
+            includeHidden,
         );
         Err("OmniSearch scanner is only supported on Windows.".to_string())
     }
@@ -728,71 +732,74 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn load_preview_data_url(path: String) -> Result<String, String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::fs;
-        use std::path::PathBuf;
+async fn load_preview_data_url(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "windows")]
+        {
+            use std::fs;
+            use std::path::PathBuf;
 
-        let file_path = PathBuf::from(path);
-        if !file_path.exists() {
-            return Err("Preview target does not exist.".to_string());
+            let file_path = PathBuf::from(path);
+            if !file_path.exists() {
+                return Err("Preview target does not exist.".to_string());
+            }
+            if !file_path.is_file() {
+                return Err("Preview target is not a file.".to_string());
+            }
+
+            let extension = file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+
+            let mime = match extension.as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                "bmp" => "image/bmp",
+                "ico" => "image/x-icon",
+                "pdf" => "application/pdf",
+                "mp4" => "video/mp4",
+                "webm" => "video/webm",
+                "mov" => "video/quicktime",
+                "m4v" => "video/x-m4v",
+                "avi" => "video/x-msvideo",
+                "mkv" => "video/x-matroska",
+                "wmv" => "video/x-ms-wmv",
+                _ => return Err("Preview not supported for this file type.".to_string()),
+            };
+
+            let metadata = fs::metadata(&file_path)
+                .map_err(|err| format!("Preview metadata read failed: {err}"))?;
+            let max_preview_bytes = match mime {
+                "application/pdf" => 5 * 1024 * 1024_u64,
+                "video/mp4" | "video/webm" | "video/quicktime" | "video/x-m4v" | "video/x-msvideo"
+                | "video/x-matroska" | "video/x-ms-wmv" => 8 * 1024 * 1024_u64,
+                _ => 10 * 1024 * 1024_u64,
+            };
+
+            if metadata.len() > max_preview_bytes {
+                return Err(format!(
+                    "Preview skipped: file too large ({} bytes).",
+                    metadata.len()
+                ));
+            }
+
+            let bytes = fs::read(&file_path).map_err(|err| format!("Preview read failed: {err}"))?;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            Ok(format!("data:{mime};base64,{encoded}"))
         }
-        if !file_path.is_file() {
-            return Err("Preview target is not a file.".to_string());
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = path;
+            Err("Preview loading is only supported on Windows.".to_string())
         }
-
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-
-        let mime = match extension.as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "bmp" => "image/bmp",
-            "ico" => "image/x-icon",
-            "pdf" => "application/pdf",
-            "mp4" => "video/mp4",
-            "webm" => "video/webm",
-            "mov" => "video/quicktime",
-            "m4v" => "video/x-m4v",
-            "avi" => "video/x-msvideo",
-            "mkv" => "video/x-matroska",
-            "wmv" => "video/x-ms-wmv",
-            _ => return Err("Preview not supported for this file type.".to_string()),
-        };
-
-        let metadata = fs::metadata(&file_path)
-            .map_err(|err| format!("Preview metadata read failed: {err}"))?;
-        let max_preview_bytes = match mime {
-            "application/pdf" => 8 * 1024 * 1024_u64,
-            "video/mp4" | "video/webm" | "video/quicktime" | "video/x-m4v" | "video/x-msvideo"
-            | "video/x-matroska" | "video/x-ms-wmv" => 20 * 1024 * 1024_u64,
-            _ => 12 * 1024 * 1024_u64,
-        };
-
-        if metadata.len() > max_preview_bytes {
-            return Err(format!(
-                "Preview skipped: file too large ({} bytes).",
-                metadata.len()
-            ));
-        }
-
-        let bytes = fs::read(&file_path).map_err(|err| format!("Preview read failed: {err}"))?;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        Ok(format!("data:{mime};base64,{encoded}"))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = path;
-        Err("Preview loading is only supported on Windows.".to_string())
-    }
-}
+    })
+    .await
+    .map_err(|err| format!("Preview load task failed: {err}"))?}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -827,10 +834,6 @@ pub fn run() {
             start_native_file_drag,
             open_external_url,
             load_preview_data_url,
-            apps::list_installed_apps,
-            apps::launch_installed_app,
-            apps::reveal_installed_app,
-            apps::load_installed_app_icon_data_url,
             desktop::get_desktop_settings,
             desktop::open_full_window_command,
             desktop::open_quick_window_command,

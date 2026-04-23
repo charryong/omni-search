@@ -32,16 +32,6 @@ const PREVIEW_DATA_URL_LIMIT = 1;
 const DUPLICATE_CANCEL_MESSAGE = "Duplicate scan cancelled.";
 const DUPLICATE_NOTICE_TIMEOUT_MS = 2400;
 const ACTION_NOTICE_TIMEOUT_MS = 1800;
-const FULL_SEARCH_COMPACT_WIDTH = 760;
-const FULL_SEARCH_COMPACT_HEIGHT = 560;
-const QUICK_SEARCH_COMPACT_WIDTH = 1060;
-const QUICK_SEARCH_COMPACT_HEIGHT = 660;
-const QUICK_RESULTS_STACK_BREAKPOINT = 980;
-const QUICK_RESULTS_SPLITTER_WIDTH = 16;
-const QUICK_RESULTS_PANE_MIN_WIDTH = 320;
-const QUICK_PREVIEW_PANE_MIN_WIDTH = 360;
-const QUICK_RESULTS_PANE_DEFAULT_RATIO = 0.42;
-const QUICK_LOOK_COPY_FEEDBACK_MS = 1400;
 
 type IndexStatus = {
   indexing: boolean;
@@ -51,7 +41,6 @@ type IndexStatus = {
 };
 
 type SearchResult = {
-  resultKind: "file" | "app";
   name: string;
   path: string;
   extension: string;
@@ -59,25 +48,6 @@ type SearchResult = {
   createdUnix: number;
   modifiedUnix: number;
   isDirectory: boolean;
-  appId?: string;
-  launchTarget?: string;
-  revealPath?: string | null;
-  isFileSystemApp?: boolean;
-  iconDataUrl?: string | null;
-  locationText?: string;
-  locationLabel?: string;
-};
-
-type InstalledApp = {
-  id: string;
-  name: string;
-  launchTarget: string;
-  isFileSystem: boolean;
-  revealPath?: string | null;
-  displayPath: string;
-  size: number;
-  createdUnix: number;
-  modifiedUnix: number;
 };
 
 type ResultIconKind = "folder" | "app" | "image" | "video" | "pdf" | "archive" | "doc" | "file";
@@ -174,12 +144,10 @@ type RecentActivityQueryEntry = {
   kind: "query";
   query: string;
   usedAt: number;
-  pinned: boolean;
 };
 type RecentActivityItemEntry = SearchResult & {
   kind: "item";
   usedAt: number;
-  pinned: boolean;
 };
 type RecentActivityEntry = RecentActivityQueryEntry | RecentActivityItemEntry;
 
@@ -228,11 +196,9 @@ const DONATE_URL = "http://buymeacoffee.com/eyuelengida";
 const THEME_STORAGE_KEY = "omnisearch_theme_mode";
 const THEME_PRESET_STORAGE_KEY = "omnisearch_theme_preset";
 const PREVIEW_STORAGE_KEY = "omnisearch_show_previews";
-const SEARCH_METRICS_HIDDEN_STORAGE_KEY = "omnisearch_search_metrics_hidden";
-const QUICK_RESULTS_PANE_RATIO_STORAGE_KEY = "omnisearch_quick_results_pane_ratio";
 const INCLUDE_FOLDERS_STORAGE_KEY = "omnisearch_include_folders";
+const INCLUDE_HIDDEN_FILES_STORAGE_KEY = "omnisearch_include_hidden_files";
 const INCLUDE_ALL_DRIVES_STORAGE_KEY = "omnisearch_include_all_drives";
-const INCLUDE_INSTALLED_APPS_STORAGE_KEY = "omnisearch_include_installed_apps";
 const SEARCH_LIMIT_STORAGE_KEY = "omnisearch_search_limit";
 const RECENT_ACTIVITY_STORAGE_KEY = "omnisearch_recent_activity";
 const RECENT_ACTIVITY_ENABLED_STORAGE_KEY = "omnisearch_recent_activity_enabled";
@@ -1264,56 +1230,6 @@ function SearchLensIcon() {
   );
 }
 
-function PinIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="6.5" r="2.5" />
-      <path d="M10.35 8.75 8.15 13h7.7l-2.2-4.25" />
-      <path d="M12 13v7.25" />
-    </svg>
-  );
-}
-
-function SearchLayoutToggleIcon({ hidden }: { hidden: boolean }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4.25" y="5" width="15.5" height="14" rx="3" />
-      <path d="M7.5 8.75h7" />
-      {hidden ? (
-        <>
-          <path d="M7.5 12.25h9" />
-          <path d="M7.5 15.5h9" />
-          <path d="m15.75 7.2 2.25 2.2 2.25-2.2" />
-        </>
-      ) : (
-        <>
-          <path d="M7.5 12.25h3.25" />
-          <path d="M13.1 12.25h3.4" />
-          <path d="M7.5 15.5h9" />
-          <path d="m15.75 9.4 2.25-2.2 2.25 2.2" />
-        </>
-      )}
-    </svg>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="9" y="8" width="10" height="11" rx="2.25" />
-      <path d="M7 15H6a2 2 0 0 1-2-2V6.75A2.75 2.75 0 0 1 6.75 4h7.5A2.75 2.75 0 0 1 17 6.75V7.5" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5.5 12.5 10 17l8.5-9" />
-    </svg>
-  );
-}
-
 function ResultTypeIcon({ kind, className }: { kind: ResultIconKind; className?: string }) {
   if (kind === "folder") {
     return (
@@ -1436,7 +1352,6 @@ type NumberInputFieldProps = {
   step?: number | string;
   placeholder?: string;
   ariaLabel?: string;
-  clearable?: boolean;
   onChange: (value: string) => void;
 };
 
@@ -1448,7 +1363,6 @@ function NumberInputField({
   step = 1,
   placeholder,
   ariaLabel,
-  clearable = false,
   onChange,
 }: NumberInputFieldProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -1469,7 +1383,7 @@ function NumberInputField({
   };
 
   return (
-    <div className={`number-input-shell ${clearable ? "has-clear" : ""}`}>
+    <div className="number-input-shell">
       <input
         ref={inputRef}
         id={id}
@@ -1484,22 +1398,6 @@ function NumberInputField({
         aria-label={ariaLabel}
         onChange={(event) => onChange(event.currentTarget.value)}
       />
-      {clearable && value.trim().length > 0 ? (
-        <button
-          type="button"
-          className="filter-input-clear"
-          aria-label={`Clear ${ariaLabel ?? "number input"}`}
-          onMouseDown={(event) => {
-            event.preventDefault();
-          }}
-          onClick={() => {
-            onChange("");
-            inputRef.current?.focus();
-          }}
-        >
-          <span aria-hidden="true">x</span>
-        </button>
-      ) : null}
       <div className="number-input-steppers" aria-hidden="true">
         <button
           type="button"
@@ -1629,51 +1527,6 @@ function extensionFromName(name: string): string {
   return trimmed.slice(dotIndex + 1).toLowerCase();
 }
 
-function normalizeFileSearchResult(result: Omit<SearchResult, "resultKind">): SearchResult {
-  return {
-    ...result,
-    resultKind: "file",
-  };
-}
-
-function isAppSearchResult(result: SearchResult): boolean {
-  return result.resultKind === "app";
-}
-
-function extensionFromPathLike(pathValue: string): string {
-  const filename = basenameFromPath(pathValue.trim());
-  const dotIndex = filename.lastIndexOf(".");
-  if (dotIndex <= 0 || dotIndex === filename.length - 1) {
-    return "";
-  }
-  return filename.slice(dotIndex + 1).trim().toLowerCase();
-}
-
-function appResultFromInstalledApp(app: InstalledApp, iconDataUrl?: string | null): SearchResult {
-  const extension =
-    extensionFromPathLike(app.revealPath ?? "") ||
-    extensionFromPathLike(app.launchTarget) ||
-    "app";
-
-  return {
-    resultKind: "app",
-    name: app.name,
-    path: app.displayPath,
-    extension,
-    size: app.size,
-    createdUnix: app.createdUnix,
-    modifiedUnix: app.modifiedUnix,
-    isDirectory: false,
-    appId: app.id,
-    launchTarget: app.launchTarget,
-    revealPath: app.revealPath ?? null,
-    isFileSystemApp: app.isFileSystem,
-    iconDataUrl: iconDataUrl ?? null,
-    locationText: app.revealPath || app.launchTarget,
-    locationLabel: app.revealPath ? "Path" : "App ID",
-  };
-}
-
 function resultDisplayName(result: SearchResult): string {
   return result.name.trim() || basenameFromPath(result.path) || "(unnamed file)";
 }
@@ -1716,11 +1569,7 @@ async function copyTextToClipboard(text: string): Promise<void> {
   }
 }
 
-function categoryFromResult(result: SearchResult): ResultViewTab {
-  if (isAppSearchResult(result)) {
-    return "apps";
-  }
-  const extension = result.extension;
+function categoryFromExtension(extension: string): ResultViewTab {
   const ext = extension.trim().toLowerCase();
   if (!ext) {
     return "all";
@@ -1741,16 +1590,10 @@ function categoryFromResult(result: SearchResult): ResultViewTab {
 }
 
 function rowKeyForResult(result: SearchResult): string {
-  if (isAppSearchResult(result)) {
-    return `app:${result.appId ?? result.launchTarget ?? result.name.toLowerCase()}`;
-  }
   return `${result.path}:${result.modifiedUnix}`;
 }
 
 function normalizedExtension(result: SearchResult): string {
-  if (isAppSearchResult(result)) {
-    return result.extension.trim().replace(/^\./, "").toLowerCase();
-  }
   if (result.isDirectory) {
     return "";
   }
@@ -1766,9 +1609,6 @@ function normalizedExtension(result: SearchResult): string {
 }
 
 function previewKindFromResult(result: SearchResult): PreviewKind {
-  if (isAppSearchResult(result)) {
-    return "none";
-  }
   if (result.isDirectory) {
     return "none";
   }
@@ -1789,9 +1629,6 @@ function previewKindFromResult(result: SearchResult): PreviewKind {
 }
 
 function iconKindFromResult(result: SearchResult): ResultIconKind {
-  if (isAppSearchResult(result)) {
-    return "app";
-  }
   if (result.isDirectory) {
     return "folder";
   }
@@ -1820,21 +1657,6 @@ function iconKindFromResult(result: SearchResult): ResultIconKind {
     return "doc";
   }
   return "file";
-}
-
-function resultLocationText(result: SearchResult): string {
-  return result.locationText?.trim() || result.path;
-}
-
-function resultLocationLabel(result: SearchResult): string {
-  return result.locationLabel?.trim() || "Path";
-}
-
-function canRevealResultLocation(result: SearchResult): boolean {
-  if (isAppSearchResult(result)) {
-    return Boolean(result.revealPath);
-  }
-  return true;
 }
 
 function ResultFallbackIcon({
@@ -1896,23 +1718,7 @@ function previewSourcesFromPath(path: string): string[] {
 function recentActivityEntryKey(entry: RecentActivityEntry): string {
   return entry.kind === "query"
     ? `query:${entry.query.trim().toLowerCase()}`
-    : isAppSearchResult(entry)
-      ? `item:app:${(entry.appId ?? entry.launchTarget ?? entry.name).trim().toLowerCase()}`
-      : `item:${stripInvisibleText(entry.path).trim().toLowerCase()}`;
-}
-
-function isPinnedRecentActivityEntry(entry: RecentActivityEntry): boolean {
-  return entry.pinned;
-}
-
-function sortRecentActivityEntries(entries: RecentActivityEntry[]): RecentActivityEntry[] {
-  return [...entries].sort((left, right) => {
-    const pinnedDelta = Number(isPinnedRecentActivityEntry(right)) - Number(isPinnedRecentActivityEntry(left));
-    if (pinnedDelta !== 0) {
-      return pinnedDelta;
-    }
-    return right.usedAt - left.usedAt;
-  });
+    : `item:${stripInvisibleText(entry.path).trim().toLowerCase()}`;
 }
 
 function normalizeRecentActivityEntries(value: unknown): RecentActivityEntry[] {
@@ -1940,7 +1746,6 @@ function normalizeRecentActivityEntries(value: unknown): RecentActivityEntry[] {
         kind: "query",
         query,
         usedAt,
-        pinned: Boolean(entry.pinned),
       });
       continue;
     }
@@ -1957,7 +1762,6 @@ function normalizeRecentActivityEntries(value: unknown): RecentActivityEntry[] {
 
     normalized.push({
       kind: "item",
-      resultKind: entry.resultKind === "app" ? "app" : "file",
       name,
       path,
       extension: typeof entry.extension === "string" ? entry.extension : "",
@@ -1965,27 +1769,19 @@ function normalizeRecentActivityEntries(value: unknown): RecentActivityEntry[] {
       createdUnix: Number.isFinite(Number(entry.createdUnix)) ? Number(entry.createdUnix) : 0,
       modifiedUnix: Number.isFinite(Number(entry.modifiedUnix)) ? Number(entry.modifiedUnix) : 0,
       isDirectory: Boolean(entry.isDirectory),
-      appId: typeof entry.appId === "string" ? entry.appId : undefined,
-      launchTarget: typeof entry.launchTarget === "string" ? entry.launchTarget : undefined,
-      revealPath: typeof entry.revealPath === "string" ? entry.revealPath : undefined,
-      isFileSystemApp: Boolean(entry.isFileSystemApp),
-      iconDataUrl: typeof entry.iconDataUrl === "string" ? entry.iconDataUrl : undefined,
-      locationText: typeof entry.locationText === "string" ? entry.locationText : undefined,
-      locationLabel: typeof entry.locationLabel === "string" ? entry.locationLabel : undefined,
       usedAt,
-      pinned: Boolean(entry.pinned),
     });
   }
 
   const deduped = new Map<string, RecentActivityEntry>();
-  for (const entry of sortRecentActivityEntries(normalized)) {
+  for (const entry of normalized.sort((left, right) => right.usedAt - left.usedAt)) {
     const key = recentActivityEntryKey(entry);
     if (!deduped.has(key)) {
       deduped.set(key, entry);
     }
   }
 
-  return sortRecentActivityEntries(Array.from(deduped.values())).slice(0, RECENT_ACTIVITY_LIMIT);
+  return Array.from(deduped.values()).slice(0, RECENT_ACTIVITY_LIMIT);
 }
 
 function relevanceScore(result: SearchResult, queryValue: string): number {
@@ -1996,26 +1792,19 @@ function relevanceScore(result: SearchResult, queryValue: string): number {
 
   const name = result.name.toLowerCase();
   const path = result.path.toLowerCase();
-  const location = result.locationText?.toLowerCase() ?? "";
-  const appBoost = isAppSearchResult(result) ? 500 : 0;
 
   if (name.startsWith(query)) {
-    return 10_000 - name.length + appBoost;
+    return 10_000 - name.length;
   }
 
   const nameIndex = name.indexOf(query);
   if (nameIndex >= 0) {
-    return 7_000 - nameIndex + appBoost;
+    return 7_000 - nameIndex;
   }
 
   const pathIndex = path.indexOf(query);
   if (pathIndex >= 0) {
-    return 4_000 - pathIndex + appBoost;
-  }
-
-  const locationIndex = location.indexOf(query);
-  if (locationIndex >= 0) {
-    return 3_000 - locationIndex + appBoost;
+    return 4_000 - pathIndex;
   }
 
   return 0;
@@ -2067,28 +1856,6 @@ function hasSelectedText(): boolean {
   }
   const selection = window.getSelection();
   return Boolean(selection && selection.toString().trim().length > 0);
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  return Boolean(
-    target.closest(
-      'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="textbox"]',
-    ),
-  );
-}
-
-function isQuickLookShortcutTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  return Boolean(
-    target.closest(
-      'input, textarea, select, button, a, iframe, video, audio, summary, [contenteditable=""], [contenteditable="true"], [role="button"], [role="link"], [role="textbox"]',
-    ),
-  );
 }
 
 function isThemePresetId(value: string | null): value is ThemePresetId {
@@ -2180,48 +1947,6 @@ function cancelSearchRequest(): void {
   });
 }
 
-function readViewportSize(): { width: number; height: number } {
-  if (typeof window === "undefined") {
-    return {
-      width: QUICK_SEARCH_COMPACT_WIDTH,
-      height: QUICK_SEARCH_COMPACT_HEIGHT,
-    };
-  }
-
-  return {
-    width: window.innerWidth,
-    height: window.innerHeight,
-  };
-}
-
-function normalizeQuickResultsPaneRatio(value: unknown): number {
-  if (value === null || value === undefined || value === "") {
-    return QUICK_RESULTS_PANE_DEFAULT_RATIO;
-  }
-
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return QUICK_RESULTS_PANE_DEFAULT_RATIO;
-  }
-
-  return Math.min(Math.max(parsed, 0.2), 0.8);
-}
-
-function clampQuickResultsPaneRatio(value: number, stageWidth: number): number {
-  const normalized = normalizeQuickResultsPaneRatio(value);
-  if (!Number.isFinite(stageWidth) || stageWidth <= 0) {
-    return normalized;
-  }
-
-  const minRatio = QUICK_RESULTS_PANE_MIN_WIDTH / stageWidth;
-  const maxRatio = (stageWidth - QUICK_PREVIEW_PANE_MIN_WIDTH - QUICK_RESULTS_SPLITTER_WIDTH) / stageWidth;
-  if (!Number.isFinite(minRatio) || !Number.isFinite(maxRatio) || maxRatio <= minRatio) {
-    return 0.5;
-  }
-
-  return Math.min(Math.max(normalized, minRatio), maxRatio);
-}
-
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") {
@@ -2263,18 +1988,6 @@ function App() {
   const [createdAfter, setCreatedAfter] = useState("");
   const [createdBefore, setCreatedBefore] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
-  const [installedAppsLoading, setInstalledAppsLoading] = useState(false);
-  const [installedAppsError, setInstalledAppsError] = useState<string | null>(null);
-  const [installedAppsRefreshKey, setInstalledAppsRefreshKey] = useState(0);
-  const [includeInstalledApps, setIncludeInstalledApps] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem(INCLUDE_INSTALLED_APPS_STORAGE_KEY) === "1";
-  });
-  const [appIconDataUrls, setAppIconDataUrls] = useState<Record<string, string>>({});
-  const [appIconFailures, setAppIconFailures] = useState<Record<string, true>>({});
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -2310,17 +2023,6 @@ function App() {
   const [resultView, setResultView] = useState<ResultViewTab>("all");
   const [resultSort, setResultSort] = useState<ResultSortMode>("relevance");
   const [windowMode, setWindowMode] = useState<WindowMode>("full");
-  const [viewportSize, setViewportSize] = useState(() => readViewportSize());
-  const [quickResultsPaneRatio, setQuickResultsPaneRatio] = useState<number>(() => {
-    if (typeof window === "undefined") {
-      return QUICK_RESULTS_PANE_DEFAULT_RATIO;
-    }
-    return normalizeQuickResultsPaneRatio(
-      window.localStorage.getItem(QUICK_RESULTS_PANE_RATIO_STORAGE_KEY),
-    );
-  });
-  const [quickResultsStageWidth, setQuickResultsStageWidth] = useState(0);
-  const [quickSplitDragging, setQuickSplitDragging] = useState(false);
   const [showPreviews, setShowPreviews] = useState<boolean>(() => {
     if (typeof window === "undefined") {
       return true;
@@ -2334,17 +2036,17 @@ function App() {
     }
     return true;
   });
-  const [searchMetricsHidden, setSearchMetricsHidden] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem(SEARCH_METRICS_HIDDEN_STORAGE_KEY) === "1";
-  });
   const [includeFolders, setIncludeFolders] = useState<boolean>(() => {
     if (typeof window === "undefined") {
       return false;
     }
     return window.localStorage.getItem(INCLUDE_FOLDERS_STORAGE_KEY) === "1";
+  });
+  const [includeHidden, setIncludeHidden] = useState<boolean>(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(INCLUDE_HIDDEN_FILES_STORAGE_KEY) === "1";
   });
   const [includeAllDrives, setIncludeAllDrives] = useState<boolean>(() => {
     if (typeof window === "undefined") {
@@ -2404,29 +2106,20 @@ function App() {
   const [previewDataUrls, setPreviewDataUrls] = useState<Record<string, string>>({});
   const [selectedPreviewSourceIndex, setSelectedPreviewSourceIndex] = useState<number>(0);
   const [selectedPreviewReadyState, setSelectedPreviewReadyState] = useState<Record<string, true>>({});
-  const [quickLookOpen, setQuickLookOpen] = useState(false);
-  const [quickLookCopyState, setQuickLookCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [appVersion, setAppVersion] = useState<string>("");
   const previousIndexedCountRef = useRef<number | null>(null);
+  const isIndexingRef = useRef(false);
   const indexSyncTimeoutRef = useRef<number | null>(null);
   const duplicateNoticeTimeoutRef = useRef<number | null>(null);
   const actionNoticeTimeoutRef = useRef<number | null>(null);
-  const quickLookCopyTimeoutRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const extensionInputRef = useRef<HTMLInputElement | null>(null);
   const createdAfterInputRef = useRef<HTMLInputElement | null>(null);
   const createdBeforeInputRef = useRef<HTMLInputElement | null>(null);
-  const quickResultsStageRef = useRef<HTMLDivElement | null>(null);
-  const quickLookDialogRef = useRef<HTMLDivElement | null>(null);
-  const quickLookReturnFocusRef = useRef<HTMLElement | null>(null);
   const searchResultContextMenuRef = useRef<HTMLDivElement | null>(null);
   const searchResultRenameInputRef = useRef<HTMLInputElement | null>(null);
   const previousSearchQueryRef = useRef("");
   const activeThemePreset = themePresetById(themePreset);
   const isQuickMode = windowMode === "quick";
-  const isCompactSearchViewport = isQuickMode
-    ? viewportSize.width <= QUICK_SEARCH_COMPACT_WIDTH || viewportSize.height <= QUICK_SEARCH_COMPACT_HEIGHT
-    : viewportSize.width <= FULL_SEARCH_COMPACT_WIDTH || viewportSize.height <= FULL_SEARCH_COMPACT_HEIGHT;
   const formattedDesktopShortcut = formatShortcutLabel(
     desktopSettings.shortcut || DEFAULT_DESKTOP_SETTINGS.shortcut,
   );
@@ -2479,128 +2172,31 @@ function App() {
       ? `${selectedDrive}:${includeFolders ? "1" : "0"}`
       : "";
 
-  const canIncludeInstalledAppsInResults =
-    includeInstalledApps &&
-    trimmedQuery.length > 0 &&
-    !hasContentSearchSyntax;
-
-  const appResults = useMemo<SearchResult[]>(() => {
-    if (!canIncludeInstalledAppsInResults) {
-      return [];
-    }
-
-    const normalizedQuery = trimmedQuery.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return [];
-    }
-
-    const matches = installedApps.filter((app) => {
-      const name = app.name.toLowerCase();
-      const displayPath = app.displayPath.toLowerCase();
-      const launchTarget = app.launchTarget.toLowerCase();
-      return (
-        name.includes(normalizedQuery) ||
-        displayPath.includes(normalizedQuery) ||
-        launchTarget.includes(normalizedQuery)
-      );
-    });
-
-    matches.sort((left, right) => {
-      const leftScore = relevanceScore(appResultFromInstalledApp(left), trimmedQuery);
-      const rightScore = relevanceScore(appResultFromInstalledApp(right), trimmedQuery);
-      if (rightScore !== leftScore) {
-        return rightScore - leftScore;
-      }
-      return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
-    });
-
-    return matches
-      .slice(0, Math.min(searchLimit, 40))
-      .map((app) => appResultFromInstalledApp(app, appIconDataUrls[app.id]));
-  }, [
-    appIconDataUrls,
-    canIncludeInstalledAppsInResults,
-    installedApps,
-    searchLimit,
-    trimmedQuery,
-  ]);
-
-  const combinedResults = useMemo<SearchResult[]>(
-    () => [...appResults, ...results],
-    [appResults, results],
-  );
-
-  const filteredCombinedResults = useMemo(() => {
-    const normalizedExtensionFilter = extension.trim().replace(/^\./, "").toLowerCase();
-    const minSize = toBytesFromMb(minSizeMb);
-    const maxSize = toBytesFromMb(maxSizeMb);
-    const minCreatedUnix = toUnixStart(createdAfter);
-    const maxCreatedUnix = toUnixEnd(createdBefore);
-
-    return combinedResults.filter((result) => {
-      if (normalizedExtensionFilter) {
-        if (normalizedExtensionFilter === "folder") {
-          if (!result.isDirectory) {
-            return false;
-          }
-        } else if (normalizedExtension(result) !== normalizedExtensionFilter) {
-          return false;
-        }
-      }
-
-      if (minSize !== undefined || maxSize !== undefined) {
-        if (isAppSearchResult(result) && result.size <= 0) {
-          return false;
-        }
-        if (minSize !== undefined && result.size < minSize) {
-          return false;
-        }
-        if (maxSize !== undefined && result.size > maxSize) {
-          return false;
-        }
-      }
-
-      if (minCreatedUnix !== undefined || maxCreatedUnix !== undefined) {
-        if (result.createdUnix <= 0) {
-          return false;
-        }
-        if (minCreatedUnix !== undefined && result.createdUnix < minCreatedUnix) {
-          return false;
-        }
-        if (maxCreatedUnix !== undefined && result.createdUnix > maxCreatedUnix) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-  }, [combinedResults, createdAfter, createdBefore, extension, maxSizeMb, minSizeMb]);
-
   const resultCounts = useMemo<Record<ResultViewTab, number>>(() => {
     const counts: Record<ResultViewTab, number> = {
-      all: filteredCombinedResults.length,
+      all: results.length,
       apps: 0,
       media: 0,
       docs: 0,
       archives: 0,
     };
 
-    for (const result of filteredCombinedResults) {
-      const category = categoryFromResult(result);
+    for (const result of results) {
+      const category = categoryFromExtension(result.extension);
       if (category !== "all") {
         counts[category] += 1;
       }
     }
 
     return counts;
-  }, [filteredCombinedResults]);
+  }, [results]);
 
   const visibleResults = useMemo(() => {
-    const filtered = filteredCombinedResults.filter((result) => {
+    const filtered = results.filter((result) => {
       if (resultView === "all") {
         return true;
       }
-      return categoryFromResult(result) === resultView;
+      return categoryFromExtension(result.extension) === resultView;
     });
 
     const sorted = [...filtered];
@@ -2619,9 +2215,6 @@ function App() {
       if (rankDiff !== 0) {
         return rankDiff;
       }
-      if (left.resultKind !== right.resultKind) {
-        return left.resultKind === "app" ? -1 : 1;
-      }
       if (left.isDirectory !== right.isDirectory) {
         return left.isDirectory ? 1 : -1;
       }
@@ -2632,7 +2225,7 @@ function App() {
     });
 
     return sorted;
-  }, [displayQuery, filteredCombinedResults, resultView, resultSort]);
+  }, [displayQuery, results, resultView, resultSort]);
 
   const visibleTotalBytes = useMemo(
     () => visibleResults.reduce((sum, result) => sum + result.size, 0),
@@ -2645,11 +2238,11 @@ function App() {
     return visibleResults.find((result) => rowKeyForResult(result) === selectedResultKey) ?? visibleResults[0];
   }, [selectedResultKey, visibleResults]);
   const previewLoadCandidates = useMemo(() => {
-    if (!selectedResult || (!showPreviews && !quickLookOpen)) {
+    if (!showPreviews || !selectedResult) {
       return [];
     }
     return [selectedResult].slice(0, PREVIEW_DATA_URL_LIMIT);
-  }, [quickLookOpen, selectedResult, showPreviews]);
+  }, [selectedResult, showPreviews]);
 
   const duplicateStats = useMemo(() => {
     let totalFiles = 0;
@@ -2815,24 +2408,16 @@ function App() {
   }, [showPreviews]);
 
   useEffect(() => {
-    window.localStorage.setItem(SEARCH_METRICS_HIDDEN_STORAGE_KEY, searchMetricsHidden ? "1" : "0");
-  }, [searchMetricsHidden]);
-
-  useEffect(() => {
-    window.localStorage.setItem(QUICK_RESULTS_PANE_RATIO_STORAGE_KEY, String(quickResultsPaneRatio));
-  }, [quickResultsPaneRatio]);
-
-  useEffect(() => {
     window.localStorage.setItem(INCLUDE_FOLDERS_STORAGE_KEY, includeFolders ? "1" : "0");
   }, [includeFolders]);
 
   useEffect(() => {
-    window.localStorage.setItem(INCLUDE_ALL_DRIVES_STORAGE_KEY, includeAllDrives ? "1" : "0");
-  }, [includeAllDrives]);
+    window.localStorage.setItem(INCLUDE_HIDDEN_FILES_STORAGE_KEY, includeHidden ? "1" : "0");
+  }, [includeHidden]);
 
   useEffect(() => {
-    window.localStorage.setItem(INCLUDE_INSTALLED_APPS_STORAGE_KEY, includeInstalledApps ? "1" : "0");
-  }, [includeInstalledApps]);
+    window.localStorage.setItem(INCLUDE_ALL_DRIVES_STORAGE_KEY, includeAllDrives ? "1" : "0");
+  }, [includeAllDrives]);
 
   useEffect(() => {
     window.localStorage.setItem(SEARCH_LIMIT_STORAGE_KEY, String(defaultSearchLimit));
@@ -2850,59 +2435,6 @@ function App() {
   }, [recentActivity]);
 
   useEffect(() => {
-    if (!includeInstalledApps) {
-      setInstalledAppsError(null);
-      return;
-    }
-
-    let active = true;
-    setInstalledAppsLoading(true);
-
-    void invoke<InstalledApp[]>("list_installed_apps")
-      .then((found) => {
-        if (!active) {
-          return;
-        }
-        setInstalledApps(found);
-        setInstalledAppsError(null);
-      })
-      .catch((error) => {
-        if (!active) {
-          return;
-        }
-        setInstalledApps([]);
-        setInstalledAppsError(`Failed to load installed apps: ${String(error)}`);
-      })
-      .finally(() => {
-        if (active) {
-          setInstalledAppsLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [includeInstalledApps, installedAppsRefreshKey]);
-
-  useEffect(() => {
-    const syncViewportSize = () => {
-      setViewportSize((current) => {
-        const next = readViewportSize();
-        if (current.width === next.width && current.height === next.height) {
-          return current;
-        }
-        return next;
-      });
-    };
-
-    syncViewportSize();
-    window.addEventListener("resize", syncViewportSize);
-    return () => {
-      window.removeEventListener("resize", syncViewportSize);
-    };
-  }, []);
-
-  useEffect(() => {
     setSearchLimitInput(String(defaultSearchLimit));
   }, [defaultSearchLimit]);
 
@@ -2915,14 +2447,10 @@ function App() {
       trimmedQuery.length === 0
     ) {
       setRecentActivity((previous) => {
-        const existingEntry = previous.find(
-          (entry) => recentActivityEntryKey(entry) === `query:${previousQuery.trim().toLowerCase()}`,
-        );
         const nextEntry: RecentActivityQueryEntry = {
           kind: "query",
           query: previousQuery,
           usedAt: Date.now(),
-          pinned: existingEntry?.kind === "query" ? existingEntry.pinned : false,
         };
         const next = [
           nextEntry,
@@ -2930,7 +2458,7 @@ function App() {
             (entry) => recentActivityEntryKey(entry) !== recentActivityEntryKey(nextEntry),
           ),
         ];
-        return sortRecentActivityEntries(next).slice(0, RECENT_ACTIVITY_LIMIT);
+        return next.slice(0, RECENT_ACTIVITY_LIMIT);
       });
     }
     previousSearchQueryRef.current = trimmedQuery;
@@ -3039,8 +2567,7 @@ function App() {
   }, [results, showPreviews]);
 
   useEffect(() => {
-    const selectedKey =
-      (showPreviews || quickLookOpen) && selectedResult ? rowKeyForResult(selectedResult) : "";
+    const selectedKey = showPreviews && selectedResult ? rowKeyForResult(selectedResult) : "";
 
     setPreviewDataUrls((previous) => {
       if (!selectedKey) {
@@ -3056,15 +2583,15 @@ function App() {
         ? previous
         : { [selectedKey]: current };
     });
-  }, [quickLookOpen, selectedResult, showPreviews]);
+  }, [selectedResult, showPreviews]);
 
   useEffect(() => {
     setSelectedPreviewSourceIndex(0);
     setSelectedPreviewReadyState({});
-  }, [quickLookOpen, selectedResultKey, showPreviews]);
+  }, [selectedResultKey, showPreviews]);
 
   useEffect(() => {
-    if (!showPreviews || previewLoadCandidates.length === 0) {
+    if (!showPreviews || previewLoadCandidates.length === 0 || isIndexingRef.current || status.indexing) {
       return;
     }
 
@@ -3081,7 +2608,7 @@ function App() {
     let cancelled = false;
     const load = async () => {
       for (const result of missing) {
-        if (cancelled) {
+        if (cancelled || isIndexingRef.current) {
           return;
         }
         try {
@@ -3110,7 +2637,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [showPreviews, previewDataUrls, previewLoadCandidates]);
+  }, [showPreviews, previewDataUrls, previewLoadCandidates, status.indexing]);
 
   useEffect(() => {
     if (activeTab !== "search") {
@@ -3162,6 +2689,7 @@ function App() {
       void invoke<IndexStatus>("index_status")
         .then((next) => {
           if (active) {
+            isIndexingRef.current = next.indexing;
             setStatus(next);
           }
         })
@@ -3194,16 +2722,20 @@ function App() {
 
     let active = true;
     setPendingIndexConfigKey(requestedIndexConfigKey);
+    isIndexingRef.current = true;
     const beginIndexing = async () => {
       try {
         const initial = await invoke<IndexStatus>("start_indexing", {
           drive: selectedDrive,
           includeFolders: includeFolders,
           include_folders: includeFolders,
+          includeHidden: includeHidden,
+          include_hidden: includeHidden,
           includeAllDrives: includeAllDrives,
           include_all_drives: includeAllDrives,
         });
         if (active) {
+          isIndexingRef.current = initial.indexing;
           setStatus(initial);
           setAppliedIndexConfigKey(requestedIndexConfigKey);
           setPendingIndexConfigKey("");
@@ -3320,9 +2852,6 @@ function App() {
       if (actionNoticeTimeoutRef.current !== null) {
         window.clearTimeout(actionNoticeTimeoutRef.current);
       }
-      if (quickLookCopyTimeoutRef.current !== null) {
-        window.clearTimeout(quickLookCopyTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -3369,7 +2898,7 @@ function App() {
             ...searchArgs,
           });
           if (active) {
-            setResults(found.map(normalizeFileSearchResult));
+            setResults(found);
             setSearchError(null);
           }
         } catch (error) {
@@ -3407,21 +2936,25 @@ function App() {
 
   async function reindexWithConfig(
     nextIncludeFolders: boolean,
+    nextIncludeHidden: boolean,
     nextIncludeAllDrives: boolean,
   ): Promise<void> {
     if (!selectedDrive) {
       return;
     }
     const nextConfigKey = nextIncludeAllDrives
-      ? `ALL:${nextIncludeFolders ? "1" : "0"}`
-      : `${selectedDrive}:${nextIncludeFolders ? "1" : "0"}`;
+      ? `ALL:${nextIncludeFolders ? "1" : "0"}${nextIncludeHidden ? "H" : "h"}`
+      : `${selectedDrive}:${nextIncludeFolders ? "1" : "0"}${nextIncludeHidden ? "H" : "h"}`;
 
     try {
       setPendingIndexConfigKey(nextConfigKey);
+      isIndexingRef.current = true;
       const next = await invoke<IndexStatus>("start_indexing", {
         drive: selectedDrive,
         includeFolders: nextIncludeFolders,
         include_folders: nextIncludeFolders,
+        includeHidden: nextIncludeHidden,
+        include_hidden: nextIncludeHidden,
         includeAllDrives: nextIncludeAllDrives,
         include_all_drives: nextIncludeAllDrives,
       });
@@ -3438,7 +2971,7 @@ function App() {
   }
 
   async function reindex(): Promise<void> {
-    await reindexWithConfig(includeFolders, includeAllDrives);
+    await reindexWithConfig(includeFolders, includeHidden, includeAllDrives);
   }
 
   function clearSearchFilters(): void {
@@ -3747,15 +3280,6 @@ function App() {
   }
 
   async function openResultPath(result: SearchResult): Promise<void> {
-    if (isAppSearchResult(result)) {
-      if (!result.revealPath) {
-        showActionNotice("This app does not expose a file location.");
-        return;
-      }
-      await revealResult(result.revealPath);
-      return;
-    }
-
     const targetPath = result.isDirectory ? result.path : parentDirectoryFromPath(result.path);
     if (!targetPath) {
       await revealResult(result.path);
@@ -3765,14 +3289,8 @@ function App() {
   }
 
   async function openResultInConsole(result: SearchResult): Promise<void> {
-    if (isAppSearchResult(result)) {
-      if (!result.revealPath) {
-        showActionNotice("This app does not expose a file location.");
-        return;
-      }
-    }
     try {
-      await invoke("open_path_in_console", { path: result.revealPath ?? result.path });
+      await invoke("open_path_in_console", { path: result.path });
       setActionError(null);
     } catch (error) {
       setActionError(`Failed to open path in console: ${String(error)}`);
@@ -3892,7 +3410,7 @@ function App() {
     event.preventDefault();
     event.stopPropagation();
 
-    if (result.isDirectory || isAppSearchResult(result)) {
+    if (result.isDirectory) {
       return;
     }
 
@@ -3909,44 +3427,10 @@ function App() {
     }
   }
 
-  async function revealSearchResult(result: SearchResult): Promise<void> {
-    if (isAppSearchResult(result)) {
-      try {
-        await invoke("reveal_installed_app", {
-          revealPath: result.revealPath,
-          reveal_path: result.revealPath,
-        });
-        setActionError(null);
-      } catch (error) {
-        setActionError(`Failed to reveal app location: ${String(error)}`);
-      }
-      return;
-    }
-
-    await revealResult(result.path);
-  }
-
   function removeRecentActivityEntry(entryKey: string): void {
     setRecentActivity((previous) =>
       previous.filter((entry) => recentActivityEntryKey(entry) !== entryKey),
     );
-  }
-
-  function toggleRecentActivityPin(entryKey: string): void {
-    setRecentActivity((previous) => {
-      const next = previous.map((entry) => {
-        if (recentActivityEntryKey(entry) !== entryKey) {
-          return entry;
-        }
-        const nextPinned = !entry.pinned;
-        return {
-          ...entry,
-          pinned: nextPinned,
-          usedAt: nextPinned ? Date.now() : entry.usedAt,
-        };
-      });
-      return sortRecentActivityEntries(next).slice(0, RECENT_ACTIVITY_LIMIT);
-    });
   }
 
   function recordRecentResult(result: SearchResult): void {
@@ -3955,20 +3439,10 @@ function App() {
     }
 
     setRecentActivity((previous) => {
-      const nextEntryKey = recentActivityEntryKey({
-        kind: "item",
-        ...result,
-        usedAt: 0,
-        pinned: false,
-      });
-      const existingEntry = previous.find(
-        (entry) => recentActivityEntryKey(entry) === nextEntryKey,
-      );
       const nextEntry: RecentActivityItemEntry = {
         kind: "item",
         ...result,
         usedAt: Date.now(),
-        pinned: existingEntry?.kind === "item" ? existingEntry.pinned : false,
       };
       const next = [
         nextEntry,
@@ -3976,7 +3450,7 @@ function App() {
           (entry) => recentActivityEntryKey(entry) !== recentActivityEntryKey(nextEntry),
         ),
       ];
-      return sortRecentActivityEntries(next).slice(0, RECENT_ACTIVITY_LIMIT);
+      return next.slice(0, RECENT_ACTIVITY_LIMIT);
     });
   }
 
@@ -3997,30 +3471,6 @@ function App() {
         // Ignore selection failures on unsupported input states.
       }
     });
-  }
-
-  async function launchSearchResult(result: SearchResult): Promise<void> {
-    if (isAppSearchResult(result)) {
-      try {
-        await invoke("launch_installed_app", {
-          launchTarget: result.launchTarget,
-          launch_target: result.launchTarget,
-          revealPath: result.revealPath,
-          reveal_path: result.revealPath,
-          isFileSystem: result.isFileSystemApp,
-          is_file_system: result.isFileSystemApp,
-        });
-        if (recentActivityEnabled) {
-          recordRecentResult(result);
-        }
-        setActionError(null);
-      } catch (error) {
-        setActionError(`Failed to launch app: ${String(error)}`);
-      }
-      return;
-    }
-
-    await openResult(result.path, result);
   }
 
   async function openResult(path: string, sourceResult?: SearchResult): Promise<void> {
@@ -4054,131 +3504,6 @@ function App() {
 
   function toggleThemeMode(): void {
     setThemeMode((previous) => (previous === "dark" ? "light" : "dark"));
-  }
-
-  function resetQuickLookCopyFeedback(): void {
-    if (quickLookCopyTimeoutRef.current !== null) {
-      window.clearTimeout(quickLookCopyTimeoutRef.current);
-      quickLookCopyTimeoutRef.current = null;
-    }
-    setQuickLookCopyState("idle");
-  }
-
-  function showQuickLookCopyFeedback(nextState: "copied" | "error"): void {
-    if (quickLookCopyTimeoutRef.current !== null) {
-      window.clearTimeout(quickLookCopyTimeoutRef.current);
-    }
-    setQuickLookCopyState(nextState);
-    quickLookCopyTimeoutRef.current = window.setTimeout(() => {
-      setQuickLookCopyState("idle");
-      quickLookCopyTimeoutRef.current = null;
-    }, QUICK_LOOK_COPY_FEEDBACK_MS);
-  }
-
-  async function handleQuickLookPathCopy(path: string): Promise<void> {
-    try {
-      await copyTextToClipboard(path);
-      showQuickLookCopyFeedback("copied");
-    } catch {
-      showQuickLookCopyFeedback("error");
-    }
-  }
-
-  function rememberQuickLookFocus(target?: HTMLElement | null): void {
-    if (target) {
-      quickLookReturnFocusRef.current = target;
-      return;
-    }
-    if (typeof document === "undefined") {
-      quickLookReturnFocusRef.current = null;
-      return;
-    }
-    quickLookReturnFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  }
-
-  function restoreQuickLookFocus(): void {
-    const target = quickLookReturnFocusRef.current;
-    quickLookReturnFocusRef.current = null;
-    window.requestAnimationFrame(() => {
-      if (target) {
-        target.focus();
-        return;
-      }
-      searchInputRef.current?.focus();
-    });
-  }
-
-  function openQuickLook(rowKey?: string, focusTarget?: HTMLElement | null): void {
-    if (activeTab !== "search" || visibleResults.length === 0) {
-      return;
-    }
-    rememberQuickLookFocus(focusTarget);
-    closeSearchResultContextMenu();
-    if (rowKey) {
-      flushSync(() => {
-        setSelectedResultKey(rowKey);
-      });
-    }
-    setQuickLookOpen(true);
-  }
-
-  function closeQuickLook(options: { restoreFocus?: boolean } = {}): void {
-    const { restoreFocus = true } = options;
-    setQuickLookOpen(false);
-    if (restoreFocus) {
-      restoreQuickLookFocus();
-    } else {
-      quickLookReturnFocusRef.current = null;
-    }
-  }
-
-  function findResultRowElement(rowKey: string): HTMLElement | null {
-    if (typeof document === "undefined") {
-      return null;
-    }
-    const rows = document.querySelectorAll<HTMLElement>("[data-result-key]");
-    for (const row of rows) {
-      if (row.dataset.resultKey === rowKey) {
-        return row;
-      }
-    }
-    return null;
-  }
-
-  function scrollResultRowIntoView(rowKey: string): void {
-    window.requestAnimationFrame(() => {
-      const row = findResultRowElement(rowKey);
-      row?.scrollIntoView({ block: "nearest" });
-    });
-  }
-
-  function selectVisibleResultAtIndex(nextIndex: number): void {
-    if (visibleResults.length === 0) {
-      return;
-    }
-    const clampedIndex = Math.max(0, Math.min(visibleResults.length - 1, nextIndex));
-    const nextRowKey = rowKeyForResult(visibleResults[clampedIndex]);
-    setSelectedResultKey((current) => (current === nextRowKey ? current : nextRowKey));
-    scrollResultRowIntoView(nextRowKey);
-  }
-
-  function moveSelectedResult(delta: number): void {
-    if (visibleResults.length === 0) {
-      return;
-    }
-    const currentIndex = selectedResultKey
-      ? visibleResults.findIndex((result) => rowKeyForResult(result) === selectedResultKey)
-      : -1;
-    const baseIndex = currentIndex >= 0 ? currentIndex : 0;
-    selectVisibleResultAtIndex(baseIndex + delta);
-  }
-
-  function jumpToVisibleResult(edge: "start" | "end"): void {
-    if (visibleResults.length === 0) {
-      return;
-    }
-    selectVisibleResultAtIndex(edge === "start" ? 0 : visibleResults.length - 1);
   }
 
   function handlePreviewError(rowKey: string, sourceCount: number): void {
@@ -4297,49 +3622,10 @@ function App() {
     recentActivityEnabled &&
     trimmedQuery.length === 0 &&
     !hasFilters;
-  const appIconLoadCandidates = useMemo(() => {
-    const seen = new Set<string>();
-    const candidates: SearchResult[] = [];
-    const pushCandidate = (result: SearchResult | null | undefined) => {
-      if (!result || !isAppSearchResult(result)) {
-        return;
-      }
-      const key = result.appId ?? result.launchTarget ?? result.name;
-      if (!key || seen.has(key) || result.iconDataUrl) {
-        return;
-      }
-      seen.add(key);
-      candidates.push(result);
-    };
-
-    visibleResults.slice(0, 16).forEach(pushCandidate);
-    pushCandidate(selectedResult);
-    visibleRecentActivity.forEach((entry) => {
-      if (entry.kind === "item") {
-        pushCandidate(entry);
-      }
-    });
-
-    return candidates;
-  }, [selectedResult, visibleRecentActivity, visibleResults]);
-  const searchMetricsAutoHidden = activeTab === "search" && isCompactSearchViewport;
-  const effectiveSearchMetricsHidden = searchMetricsHidden || searchMetricsAutoHidden;
-  const searchMetricsToggleLabel = searchMetricsAutoHidden
-    ? "Compact search layout is on automatically while the window is small"
-    : searchMetricsHidden
-      ? "Show full search layout"
-      : "Switch to compact search layout";
   const selectedResultRowKey = selectedResult ? rowKeyForResult(selectedResult) : "";
   const selectedResultIsDirectory = selectedResult?.isDirectory ?? false;
   const selectedResultExtension = selectedResult ? normalizedExtension(selectedResult) : "";
   const selectedResultIconKind = selectedResult ? iconKindFromResult(selectedResult) : "file";
-  const selectedResultAppIconSrc =
-    selectedResult && isAppSearchResult(selectedResult)
-      ? selectedResult.iconDataUrl ??
-        (selectedResult.appId ? appIconDataUrls[selectedResult.appId] ?? "" : "")
-      : "";
-  const selectedResultLocationText = selectedResult ? resultLocationText(selectedResult) : "";
-  const selectedResultLocationLabel = selectedResult ? resultLocationLabel(selectedResult) : "Path";
   const selectedResultExtensionLabel = selectedResult
     ? selectedResultIsDirectory
       ? "folder"
@@ -4347,7 +3633,7 @@ function App() {
         ? `.${selectedResultExtension}`
         : "file"
     : "";
-  const selectedPreviewKind = selectedResult && showPreviews ? previewKindFromResult(selectedResult) : "none";
+  const selectedPreviewKind = selectedResult && showPreviews && !status.indexing ? previewKindFromResult(selectedResult) : "none";
   const selectedPreviewSources =
     selectedResult && selectedPreviewKind !== "none"
       ? [
@@ -4368,33 +3654,6 @@ function App() {
       ? (selectedPreviewSources[selectedPreviewIndex] ?? "")
       : "";
   const hasSelectedPreview = selectedPreviewSrc.length > 0;
-  const quickLookPreviewKind =
-    quickLookOpen && selectedResult ? previewKindFromResult(selectedResult) : "none";
-  const quickLookPreviewSources =
-    selectedResult && quickLookPreviewKind !== "none"
-      ? [
-          ...(previewDataUrls[selectedResultRowKey] ? [previewDataUrls[selectedResultRowKey]] : []),
-          ...previewSourcesFromPath(selectedResult.path),
-        ].filter((source, index, all) => source.length > 0 && all.indexOf(source) === index)
-      : [];
-  const quickLookPreviewIndex = selectedResult ? selectedPreviewSourceIndex : 0;
-  const quickLookPreviewFailed = quickLookPreviewIndex < 0;
-  const quickLookPreviewRenderKey = selectedResult
-    ? `${selectedResultRowKey}:${quickLookPreviewIndex}:${quickLookPreviewKind}:quick-look`
-    : "";
-  const quickLookPreviewReady = Boolean(
-    quickLookPreviewRenderKey && selectedPreviewReadyState[quickLookPreviewRenderKey],
-  );
-  const quickLookPreviewSrc =
-    !quickLookPreviewFailed && quickLookPreviewKind !== "none"
-      ? (quickLookPreviewSources[quickLookPreviewIndex] ?? "")
-      : "";
-  const hasQuickLookPreview = quickLookPreviewSrc.length > 0;
-  const selectedResultPositionIndex = selectedResult
-    ? visibleResults.findIndex((result) => rowKeyForResult(result) === selectedResultRowKey)
-    : -1;
-  const selectedResultPosition =
-    selectedResultPositionIndex >= 0 ? selectedResultPositionIndex + 1 : visibleResults.length > 0 ? 1 : 0;
   const activeSearchSyntaxHelpSection =
     SEARCH_SYNTAX_HELP_SECTIONS.find((section) => section.id === searchSyntaxHelpSectionId) ??
     SEARCH_SYNTAX_HELP_SECTIONS[0];
@@ -4405,24 +3664,12 @@ function App() {
     "Content search reads matching files from disk. Pair it with ext:txt or other filters for the best speed.";
   const showQuickInlineSearching = isQuickMode && loading && hasSearchRequest;
   const showQuickEmptyState = isQuickMode && visibleResults.length === 0 && !showQuickInlineSearching;
-  const quickSplitResizeEnabled =
-    isQuickMode && !showQuickEmptyState && viewportSize.width > QUICK_RESULTS_STACK_BREAKPOINT;
-  const effectiveQuickResultsPaneRatio = quickSplitResizeEnabled
-    ? clampQuickResultsPaneRatio(quickResultsPaneRatio, quickResultsStageWidth)
-    : QUICK_RESULTS_PANE_DEFAULT_RATIO;
-  const quickResultsStageStyle = quickSplitResizeEnabled
-    ? ({
-        "--quick-results-pane-width": `${(effectiveQuickResultsPaneRatio * 100).toFixed(2)}%`,
-      } as CSSProperties)
-    : undefined;
   const quickPreviewEmptyTitle = searchError
     ? "Search couldn't finish"
     : showQuickEmptyState
       ? trimmedQuery || hasFilters
-        ? "No results match the current filters"
-        : includeInstalledApps
-          ? "Start typing to search indexed files and apps"
-          : "Start typing to search indexed files"
+        ? "No files match the current filters"
+        : "Start typing to search indexed files"
       : "Pick a result to preview";
   const quickPreviewEmptyDetail = searchError
     ? "Check the message above and try again."
@@ -4430,16 +3677,6 @@ function App() {
       ? "Try another search or adjust the filters."
       : "";
   const activeSearchResultMenu = searchResultContextMenu?.result ?? null;
-  const activeSearchResultIsApp = activeSearchResultMenu ? isAppSearchResult(activeSearchResultMenu) : false;
-  const activeSearchResultCanReveal = activeSearchResultMenu
-    ? canRevealResultLocation(activeSearchResultMenu)
-    : false;
-  const activeSearchResultLocationText = activeSearchResultMenu
-    ? resultLocationText(activeSearchResultMenu)
-    : "";
-  const activeSearchResultLocationLabel = activeSearchResultMenu
-    ? resultLocationLabel(activeSearchResultMenu)
-    : "Path";
   const searchResultContextMenuStyle = searchResultContextMenu
     ? ({
         left: `${Math.max(
@@ -4461,231 +3698,10 @@ function App() {
       } as CSSProperties)
     : undefined;
 
-  useEffect(() => {
-    const node = quickResultsStageRef.current;
-    if (!node || !isQuickMode) {
-      setQuickResultsStageWidth(0);
-      return;
-    }
-
-    const updateStageWidth = () => {
-      setQuickResultsStageWidth(node.getBoundingClientRect().width);
-    };
-
-    updateStageWidth();
-
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", updateStageWidth);
-      return () => {
-        window.removeEventListener("resize", updateStageWidth);
-      };
-    }
-
-    const observer = new ResizeObserver(() => {
-      updateStageWidth();
-    });
-    observer.observe(node);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [isQuickMode, showQuickEmptyState]);
-
-  useEffect(() => {
-    if (!quickSplitResizeEnabled) {
-      setQuickSplitDragging(false);
-    }
-  }, [quickSplitResizeEnabled]);
-
-  useEffect(() => {
-    if (!quickSplitDragging) {
-      return;
-    }
-
-    const handleMouseMove = (event: MouseEvent) => {
-      const node = quickResultsStageRef.current;
-      if (!node) {
-        return;
-      }
-
-      const rect = node.getBoundingClientRect();
-      if (rect.width <= 0) {
-        return;
-      }
-
-      const nextRatio = (event.clientX - rect.left - QUICK_RESULTS_SPLITTER_WIDTH / 2) / rect.width;
-      setQuickResultsPaneRatio(clampQuickResultsPaneRatio(nextRatio, rect.width));
-    };
-
-    const stopDragging = () => {
-      setQuickSplitDragging(false);
-    };
-
-    const previousBodyCursor = document.body.style.cursor;
-    const previousBodyUserSelect = document.body.style.userSelect;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", stopDragging);
-    window.addEventListener("blur", stopDragging);
-
-    return () => {
-      document.body.style.cursor = previousBodyCursor;
-      document.body.style.userSelect = previousBodyUserSelect;
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", stopDragging);
-      window.removeEventListener("blur", stopDragging);
-    };
-  }, [quickSplitDragging]);
-
-  useEffect(() => {
-    if (!quickLookOpen) {
-      return;
-    }
-    if (activeTab !== "search" || !selectedResult) {
-      setQuickLookOpen(false);
-      quickLookReturnFocusRef.current = null;
-    }
-  }, [activeTab, quickLookOpen, selectedResult]);
-
-  useEffect(() => {
-    resetQuickLookCopyFeedback();
-  }, [quickLookOpen, selectedResultRowKey]);
-
-  useEffect(() => {
-    if (!quickLookOpen) {
-      return;
-    }
-    const frame = window.requestAnimationFrame(() => {
-      quickLookDialogRef.current?.focus();
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [quickLookOpen, selectedResultRowKey]);
-
-  useEffect(() => {
-    if (!quickLookOpen || activeTab !== "search") {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isQuickLookShortcutTarget(event.target)) {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          closeQuickLook();
-        }
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeQuickLook();
-      } else if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-        event.preventDefault();
-        moveSelectedResult(1);
-      } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-        event.preventDefault();
-        moveSelectedResult(-1);
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        jumpToVisibleResult("start");
-      } else if (event.key === "End") {
-        event.preventDefault();
-        jumpToVisibleResult("end");
-      } else if (event.key === "Enter" && selectedResult) {
-        event.preventDefault();
-        closeQuickLook({ restoreFocus: false });
-        void launchSearchResult(selectedResult);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [activeTab, quickLookOpen, selectedResult, selectedResultKey, selectedResultRowKey, visibleResults]);
-
-  useEffect(() => {
-    const missing = appIconLoadCandidates.filter((result) => {
-      const appId = result.appId;
-      if (!appId) {
-        return false;
-      }
-      return !appIconDataUrls[appId] && !appIconFailures[appId];
-    });
-    if (missing.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-    const load = async () => {
-      for (const result of missing) {
-        const appId = result.appId;
-        if (cancelled || !appId) {
-          return;
-        }
-        try {
-          const dataUrl = await invoke<string>("load_installed_app_icon_data_url", {
-            launchTarget: result.launchTarget,
-            launch_target: result.launchTarget,
-            revealPath: result.revealPath,
-            reveal_path: result.revealPath,
-            isFileSystem: result.isFileSystemApp,
-            is_file_system: result.isFileSystemApp,
-          });
-          if (cancelled || !dataUrl.startsWith("data:")) {
-            continue;
-          }
-          setAppIconDataUrls((previous) => {
-            if (previous[appId]) {
-              return previous;
-            }
-            return {
-              ...previous,
-              [appId]: dataUrl,
-            };
-          });
-          setRecentActivity((previous) =>
-            previous.map((entry) =>
-              entry.kind === "item" && entry.appId === appId && !entry.iconDataUrl
-                ? {
-                    ...entry,
-                    iconDataUrl: dataUrl,
-                  }
-                : entry,
-            ),
-          );
-        } catch {
-          if (cancelled) {
-            return;
-          }
-          setAppIconFailures((previous) => ({
-            ...previous,
-            [appId]: true,
-          }));
-        }
-      }
-    };
-
-    void load();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [appIconDataUrls, appIconFailures, appIconLoadCandidates]);
-
-  function adjustQuickResultsPaneRatio(delta: number): void {
-    setQuickResultsPaneRatio((current) =>
-      clampQuickResultsPaneRatio(current + delta, quickResultsStageWidth),
-    );
-  }
-
   function renderRecentActivityCard(entry: RecentActivityEntry): ReactNode {
     const entryKey = recentActivityEntryKey(entry);
     const isQueryEntry = entry.kind === "query";
-    const isPinnedEntry = entry.pinned;
-    const previewKind = !isQueryEntry && showPreviews ? previewKindFromResult(entry) : "none";
+    const previewKind = !isQueryEntry && showPreviews && !status.indexing ? previewKindFromResult(entry) : "none";
     const previewSources =
       !isQueryEntry && (previewKind === "image" || previewKind === "video")
         ? previewSourcesFromPath(entry.path).filter(
@@ -4694,25 +3710,19 @@ function App() {
         : [];
     const previewSrc = previewSources[0] ?? "";
     const iconKind = !isQueryEntry ? iconKindFromResult(entry) : null;
-    const appIconSrc =
-      !isQueryEntry && isAppSearchResult(entry)
-        ? entry.iconDataUrl ?? (entry.appId ? appIconDataUrls[entry.appId] ?? "" : "")
-        : "";
 
     const activateCard = () => {
       if (isQueryEntry) {
         reopenRecentQuery(entry.query);
         return;
       }
-      void launchSearchResult(entry);
+      void openResult(entry.path, entry);
     };
 
     return (
       <article
         key={entryKey}
-        className={`recent-activity-card ${isQueryEntry ? "is-query" : "is-item"} ${
-          isPinnedEntry ? "is-pinned" : ""
-        }`}
+        className={`recent-activity-card ${isQueryEntry ? "is-query" : "is-item"}`}
         role="button"
         tabIndex={0}
         onClick={activateCard}
@@ -4734,18 +3744,8 @@ function App() {
             <span className="recent-activity-query-icon">
               <SearchLensIcon />
             </span>
-          ) : appIconSrc.length > 0 ? (
-            <img className="preview-media ready app-result-icon-media" src={appIconSrc} alt="" loading="lazy" />
           ) : previewSrc.length > 0 && previewKind === "image" ? (
             <img className="preview-media ready" src={previewSrc} alt="" loading="lazy" />
-          ) : previewSrc.length > 0 && previewKind === "video" ? (
-            <video
-              className="preview-media ready"
-              src={previewSrc}
-              muted
-              playsInline
-              preload="metadata"
-            />
           ) : null}
         </div>
 
@@ -4754,51 +3754,21 @@ function App() {
           {!isQueryEntry ? <span>{entry.path}</span> : null}
         </div>
 
-        <div className="recent-activity-actions">
-          <button
-            type="button"
-            className={`recent-activity-pin ${isPinnedEntry ? "is-pinned" : ""}`}
-            aria-label={
-              isPinnedEntry
-                ? isQueryEntry
-                  ? `Unpin recent search ${entry.query}`
-                  : `Unpin recent item ${entry.name}`
-                : isQueryEntry
-                  ? `Pin recent search ${entry.query}`
-                  : `Pin recent item ${entry.name}`
-            }
-            title={
-              isPinnedEntry
-                ? isQueryEntry
-                  ? "Unpin search"
-                  : "Unpin item"
-                : isQueryEntry
-                  ? "Pin search"
-                  : "Pin item"
-            }
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleRecentActivityPin(entryKey);
-            }}
-          >
-            <PinIcon />
-          </button>
-          <button
-            type="button"
-            className="recent-activity-remove"
-            aria-label={
-              isQueryEntry
-                ? `Remove recent search ${entry.query}`
-                : `Remove recent item ${entry.name}`
-            }
-            onClick={(event) => {
-              event.stopPropagation();
-              removeRecentActivityEntry(entryKey);
-            }}
-          >
-            <span aria-hidden="true">x</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          className="recent-activity-remove"
+          aria-label={
+            isQueryEntry
+              ? `Remove recent search ${entry.query}`
+              : `Remove recent item ${entry.name}`
+          }
+          onClick={(event) => {
+            event.stopPropagation();
+            removeRecentActivityEntry(entryKey);
+          }}
+        >
+          <span aria-hidden="true">x</span>
+        </button>
       </article>
     );
   }
@@ -4818,7 +3788,12 @@ function App() {
         <header className={`panel-header ${isQuickMode ? "quick-panel-header" : ""}`}>
           <div className="panel-title-block">
             {isQuickMode ? <span className="quick-mode-badge">Quick Window</span> : null}
-            {!isQuickMode ? <h1>OmniSearch</h1> : null}
+            <h1>OmniSearch</h1>
+            {isQuickMode ? (
+              <p className="panel-subtitle">
+                Jump back to the full workspace when you need deeper controls.
+              </p>
+            ) : null}
           </div>
           <div className={`header-tools ${isQuickMode ? "quick-header-tools" : ""}`}>
             {isQuickMode ? (
@@ -4884,7 +3859,7 @@ function App() {
                     onChange={(event) => {
                       const nextIncludeAllDrives = event.currentTarget.checked;
                       setIncludeAllDrives(nextIncludeAllDrives);
-                      void reindexWithConfig(includeFolders, nextIncludeAllDrives);
+                      void reindexWithConfig(includeFolders, includeHidden, nextIncludeAllDrives);
                     }}
                   />
                   <span className="scan-switch-slider" aria-hidden="true" />
@@ -4902,10 +3877,27 @@ function App() {
                     onChange={(event) => {
                       const nextIncludeFolders = event.currentTarget.checked;
                       setIncludeFolders(nextIncludeFolders);
-                      void reindexWithConfig(nextIncludeFolders, includeAllDrives);
+                      void reindexWithConfig(nextIncludeFolders, includeHidden, includeAllDrives);
                     }}
                   />
                   <span>Include folders</span>
+                </label>
+                <label
+                  className="scan-option"
+                  htmlFor="include-hidden-toggle"
+                  title="Include hidden and system files in search results."
+                >
+                  <input
+                    id="include-hidden-toggle"
+                    type="checkbox"
+                    checked={includeHidden}
+                    onChange={(event) => {
+                      const nextIncludeHidden = event.currentTarget.checked;
+                      setIncludeHidden(nextIncludeHidden);
+                      void reindexWithConfig(includeFolders, nextIncludeHidden, includeAllDrives);
+                    }}
+                  />
+                  <span>Include hidden files</span>
                 </label>
                 <button type="button" className="ghost-button" onClick={reindex}>
                   Reindex
@@ -4970,19 +3962,6 @@ function App() {
               }}
             >
               About
-            </button>
-            <button
-              type="button"
-              className={`tab-icon-button ${effectiveSearchMetricsHidden ? "is-active" : ""}`}
-              aria-pressed={effectiveSearchMetricsHidden}
-              aria-label={searchMetricsToggleLabel}
-              title={searchMetricsToggleLabel}
-              disabled={searchMetricsAutoHidden}
-              onClick={() => {
-                setSearchMetricsHidden((current) => !current);
-              }}
-            >
-              <SearchLayoutToggleIcon hidden={effectiveSearchMetricsHidden} />
             </button>
             <span className="tab-row-spacer" aria-hidden="true" />
             <button
@@ -5053,175 +4032,150 @@ function App() {
               ) : null}
             </div>
 
-            {!effectiveSearchMetricsHidden ? (
-              <section className={`filter-grid ${isQuickMode ? "quick-filter-grid" : ""}`}>
-                <label>
-                  Extension
-                  <div className="filter-input-shell">
-                    <input
-                      ref={extensionInputRef}
-                      type="text"
-                      value={extension}
-                      autoComplete="off"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      onChange={(event) => setExtension(event.currentTarget.value)}
-                      placeholder=".mp4 or folder"
-                    />
-                    {extension.trim().length > 0 ? (
-                      <button
-                        type="button"
-                        className="filter-input-clear"
-                        aria-label="Clear extension filter"
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                        }}
-                        onClick={() => {
-                          setExtension("");
-                          extensionInputRef.current?.focus();
-                        }}
-                      >
-                        <span aria-hidden="true">x</span>
-                      </button>
-                    ) : null}
-                  </div>
-                </label>
-                <label>
-                  Min size (MB)
-                  <NumberInputField
-                    min={0}
-                    step={1}
-                    value={minSizeMb}
-                    placeholder="0"
-                    ariaLabel="Minimum size in megabytes"
-                    clearable
-                    onChange={setMinSizeMb}
+            <section className={`filter-grid ${isQuickMode ? "quick-filter-grid" : ""}`}>
+              <label>
+                Extension
+                <input
+                  type="text"
+                  value={extension}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  onChange={(event) => setExtension(event.currentTarget.value)}
+                  placeholder=".mp4 or folder"
+                />
+              </label>
+              <label>
+                Min size (MB)
+                <NumberInputField
+                  min={0}
+                  step={1}
+                  value={minSizeMb}
+                  placeholder="0"
+                  ariaLabel="Minimum size in megabytes"
+                  onChange={setMinSizeMb}
+                />
+              </label>
+              <label>
+                Max size (MB)
+                <NumberInputField
+                  min={0}
+                  step={1}
+                  value={maxSizeMb}
+                  placeholder="2048"
+                  ariaLabel="Maximum size in megabytes"
+                  onChange={setMaxSizeMb}
+                />
+              </label>
+              <label>
+                Created after
+                <div className="date-input-shell">
+                  <input
+                    ref={createdAfterInputRef}
+                    type="date"
+                    value={createdAfter}
+                    autoComplete="off"
+                    onChange={(event) => setCreatedAfter(event.currentTarget.value)}
                   />
-                </label>
-                <label>
-                  Max size (MB)
-                  <NumberInputField
-                    min={0}
-                    step={1}
-                    value={maxSizeMb}
-                    placeholder="2048"
-                    ariaLabel="Maximum size in megabytes"
-                    clearable
-                    onChange={setMaxSizeMb}
+                  <button
+                    type="button"
+                    className="date-input-trigger"
+                    aria-label="Open created after date picker"
+                    onClick={() => {
+                      openDateInputPicker(createdAfterInputRef.current);
+                    }}
+                  >
+                    <CalendarIcon />
+                  </button>
+                </div>
+              </label>
+              <label>
+                Created before
+                <div className="date-input-shell">
+                  <input
+                    ref={createdBeforeInputRef}
+                    type="date"
+                    value={createdBefore}
+                    autoComplete="off"
+                    onChange={(event) => setCreatedBefore(event.currentTarget.value)}
                   />
-                </label>
-                <label>
-                  Created after
-                  <div className="date-input-shell">
-                    <input
-                      ref={createdAfterInputRef}
-                      type="date"
-                      value={createdAfter}
-                      autoComplete="off"
-                      onChange={(event) => setCreatedAfter(event.currentTarget.value)}
-                    />
-                    <button
-                      type="button"
-                      className="date-input-trigger"
-                      aria-label="Open created after date picker"
-                      onClick={() => {
-                        openDateInputPicker(createdAfterInputRef.current);
-                      }}
-                    >
-                      <CalendarIcon />
-                    </button>
-                  </div>
-                </label>
-                <label>
-                  Created before
-                  <div className="date-input-shell">
-                    <input
-                      ref={createdBeforeInputRef}
-                      type="date"
-                      value={createdBefore}
-                      autoComplete="off"
-                      onChange={(event) => setCreatedBefore(event.currentTarget.value)}
-                    />
-                    <button
-                      type="button"
-                      className="date-input-trigger"
-                      aria-label="Open created before date picker"
-                      onClick={() => {
-                        openDateInputPicker(createdBeforeInputRef.current);
-                      }}
-                    >
-                      <CalendarIcon />
-                    </button>
-                  </div>
-                </label>
-              </section>
-            ) : null}
+                  <button
+                    type="button"
+                    className="date-input-trigger"
+                    aria-label="Open created before date picker"
+                    onClick={() => {
+                      openDateInputPicker(createdBeforeInputRef.current);
+                    }}
+                  >
+                    <CalendarIcon />
+                  </button>
+                </div>
+              </label>
+            </section>
 
             <section className={`results-panel ${isQuickMode ? "quick-results-panel" : ""}`}>
-              {!effectiveSearchMetricsHidden ? (
-                <div className={`results-toolbar ${isQuickMode ? "quick-results-toolbar" : ""}`}>
-                  <div className="results-scope-tabs" aria-label="Result categories">
-                    {RESULT_VIEW_TABS.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={`scope-tab ${resultView === item.id ? "is-active" : ""}`}
-                        onClick={() => {
-                          setResultView(item.id);
-                        }}
-                      >
-                        <span>{item.label}</span>
-                        <small>{resultCounts[item.id].toLocaleString()}</small>
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="results-toolbar-actions">
-                    <div className="results-inline-stats" aria-live="polite">
-                      <span>
-                        {`${visibleResults.length.toLocaleString()} shown`}
-                        {visibleResults.length !== filteredCombinedResults.length
-                          ? ` / ${filteredCombinedResults.length.toLocaleString()}`
-                          : ""}
-                        {` (limit ${searchLimit.toLocaleString()})`}
-                      </span>
-                      <span>{formatBytes(visibleTotalBytes)}</span>
-                    </div>
-                    <label className="preview-toggle" htmlFor="preview-toggle">
-                      <input
-                        id="preview-toggle"
-                        type="checkbox"
-                        checked={showPreviews}
-                        onChange={(event) => {
-                          setShowPreviews(event.currentTarget.checked);
-                        }}
-                      />
-                      <span>Show previews</span>
-                    </label>
-                    <label className="sort-picker" htmlFor="result-sort">
-                      <span className="sort-picker-label">Sort</span>
-                      <select
-                        id="result-sort"
-                        value={resultSort}
-                        onChange={(event) => {
-                          setResultSort(event.currentTarget.value as ResultSortMode);
-                        }}
-                      >
-                        <option value="relevance">Best match</option>
-                        <option value="newest">Newest</option>
-                        <option value="largest">Largest</option>
-                        <option value="name">Name A-Z</option>
-                      </select>
-                    </label>
-                    {hasFilters ? (
-                      <button type="button" className="clear-filters" onClick={clearSearchFilters}>
-                        Clear filters
-                      </button>
-                    ) : null}
-                  </div>
+              <div className={`results-toolbar ${isQuickMode ? "quick-results-toolbar" : ""}`}>
+                <div className="results-scope-tabs" aria-label="Result categories">
+                  {RESULT_VIEW_TABS.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`scope-tab ${resultView === item.id ? "is-active" : ""}`}
+                      onClick={() => {
+                        setResultView(item.id);
+                      }}
+                    >
+                      <span>{item.label}</span>
+                      <small>{resultCounts[item.id].toLocaleString()}</small>
+                    </button>
+                  ))}
                 </div>
-              ) : null}
+
+                <div className="results-toolbar-actions">
+                  <div className="results-inline-stats" aria-live="polite">
+                    <span>
+                      {`${visibleResults.length.toLocaleString()} shown`}
+                      {visibleResults.length !== results.length
+                        ? ` / ${results.length.toLocaleString()}`
+                        : ""}
+                      {` (limit ${searchLimit.toLocaleString()})`}
+                    </span>
+                    <span>{formatBytes(visibleTotalBytes)}</span>
+                  </div>
+                  <label className="preview-toggle" htmlFor="preview-toggle">
+                    <input
+                      id="preview-toggle"
+                      type="checkbox"
+                      checked={showPreviews}
+                      onChange={(event) => {
+                        setShowPreviews(event.currentTarget.checked);
+                      }}
+                    />
+                    <span>Show previews</span>
+                  </label>
+                  <label className="sort-picker" htmlFor="result-sort">
+                    <span className="sort-picker-label">Sort</span>
+                    <select
+                      id="result-sort"
+                      value={resultSort}
+                      onChange={(event) => {
+                        setResultSort(event.currentTarget.value as ResultSortMode);
+                      }}
+                    >
+                      <option value="relevance">Best match</option>
+                      <option value="newest">Newest</option>
+                      <option value="largest">Largest</option>
+                      <option value="name">Name A-Z</option>
+                    </select>
+                  </label>
+                  {hasFilters ? (
+                    <button type="button" className="clear-filters" onClick={clearSearchFilters}>
+                      Clear filters
+                    </button>
+                  ) : null}
+                </div>
+              </div>
 
               {loading ? <p className="hint compact-hint">{contentSearchStatusMessage}</p> : null}
               {searchError ? <p className="error-row">{searchError}</p> : null}
@@ -5249,7 +4203,7 @@ function App() {
                     <div className="recent-activity-empty">
                       <strong>No recent activity yet</strong>
                       <span>
-                        Search something or open a result from the list, then it will show up
+                        Search something or open a file from the results list, then it will show up
                         here.
                       </span>
                     </div>
@@ -5257,13 +4211,11 @@ function App() {
                 </section>
               ) : (
                 <div
-                  ref={quickResultsStageRef}
                   className={
                     isQuickMode
                       ? `results-stage quick-results-stage ${showQuickEmptyState ? "is-empty" : ""}`
                       : "results-stage"
                   }
-                  style={quickResultsStageStyle}
                 >
                 <div
                   className={`results-list-shell ${isQuickMode ? "quick-results-column" : ""} ${
@@ -5274,17 +4226,14 @@ function App() {
                     {visibleResults.map((result) => {
                       const rowKey = rowKeyForResult(result);
                       const isDirectory = result.isDirectory;
-                      const isAppResult = isAppSearchResult(result);
                       const normalizedExt = normalizedExtension(result);
                       const iconKind = iconKindFromResult(result);
-                      const extensionLabel = isAppResult
-                        ? "app"
-                        : isDirectory
+                      const extensionLabel = isDirectory
                         ? "folder"
                         : normalizedExt
                           ? `.${normalizedExt}`
                           : "file";
-                      const previewKind = showPreviews ? previewKindFromResult(result) : "none";
+                      const previewKind = showPreviews && !status.indexing ? previewKindFromResult(result) : "none";
                       const previewSources =
                         previewKind !== "none"
                           ? previewSourcesFromPath(result.path).filter(
@@ -5301,21 +4250,14 @@ function App() {
                           ? (previewSources[activePreviewIndex] ?? "")
                           : "";
                       const hasRenderablePreview = previewSrc.length > 0;
-                      const appIconSrc = isAppResult
-                        ? result.iconDataUrl ?? (result.appId ? appIconDataUrls[result.appId] ?? "" : "")
-                        : "";
-                      const canDragResultFile = !isDirectory && !isAppResult;
-                      const canRevealLocation = canRevealResultLocation(result);
+                      const canDragResultFile = !isDirectory;
 
                       return (
                         <li
                           key={rowKey}
                           className={`result-row clickable ${isQuickMode ? "quick-result-row" : ""} ${
-                            (isQuickMode || quickLookOpen) && rowKey === selectedResultRowKey
-                              ? "is-selected"
-                              : ""
+                            isQuickMode && rowKey === selectedResultRowKey ? "is-selected" : ""
                           } ${canDragResultFile ? "draggable-file" : ""}`}
-                          data-result-key={rowKey}
                           draggable={canDragResultFile}
                           onDragStart={(event) => {
                             handleSearchResultDragStart(event, result);
@@ -5327,35 +4269,36 @@ function App() {
                           tabIndex={0}
                           title={
                             isQuickMode
-                              ? "Click to select, press Space for Quick Look, double-click to open"
-                              : "Click to select, press Space for Quick Look, double-click to open"
+                              ? "Click to select, double-click to open"
+                              : "Click to reveal in folder, double-click to open"
                           }
-                          onFocus={() => {
-                            setSelectedResultKey(rowKey);
-                          }}
-                          onClick={(event) => {
+                          onClick={() => {
                             if (hasSelectedText()) {
                               return;
                             }
-                            event.currentTarget.focus();
-                            setSelectedResultKey(rowKey);
+                            if (isQuickMode) {
+                              setSelectedResultKey(rowKey);
+                              return;
+                            }
+                            void revealResult(result.path);
                           }}
                           onDoubleClick={() => {
                             if (hasSelectedText()) {
                               return;
                             }
-                            void launchSearchResult(result);
+                            void openResult(result.path);
                           }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") {
                               event.preventDefault();
-                              void launchSearchResult(result);
+                              void openResult(result.path);
                             } else if (event.key === " ") {
                               event.preventDefault();
-                              if (isEditableTarget(event.target)) {
+                              if (isQuickMode) {
+                                setSelectedResultKey(rowKey);
                                 return;
                               }
-                              openQuickLook(rowKey, event.currentTarget);
+                              void revealResult(result.path);
                             }
                           }}
                         >
@@ -5365,14 +4308,7 @@ function App() {
                               aria-hidden="true"
                             >
                               <ResultFallbackIcon result={result} className="preview-fallback-icon-shell" />
-                              {appIconSrc.length > 0 ? (
-                                <img
-                                  className="preview-media ready app-result-icon-media"
-                                  src={appIconSrc}
-                                  alt=""
-                                  loading="lazy"
-                                />
-                              ) : hasRenderablePreview && previewKind === "image" ? (
+                              {hasRenderablePreview && previewKind === "image" ? (
                                 <img
                                   key={`${rowKey}:${activePreviewIndex}:image`}
                                   className={`preview-media ${previewReady ? "ready" : ""}`}
@@ -5387,45 +4323,10 @@ function App() {
                                   }}
                                 />
                               ) : null}
-                              {hasRenderablePreview && previewKind === "video" ? (
-                                <video
-                                  key={`${rowKey}:${activePreviewIndex}:video`}
-                                  className={`preview-media ${previewReady ? "ready" : ""}`}
-                                  src={previewSrc}
-                                  muted
-                                  playsInline
-                                  preload="metadata"
-                                  onLoadedData={() => {
-                                    handlePreviewReady(previewRenderKey);
-                                  }}
-                                  onError={() => {
-                                    handlePreviewError(rowKey, previewSources.length);
-                                  }}
-                                />
-                              ) : null}
-                              {hasRenderablePreview && previewKind === "pdf" ? (
-                                <iframe
-                                  key={`${rowKey}:${activePreviewIndex}:pdf`}
-                                  className={`preview-media ${previewReady ? "ready" : ""}`}
-                                  src={`${previewSrc}#toolbar=0&navpanes=0&scrollbar=0&page=1&view=FitH`}
-                                  title=""
-                                  loading="lazy"
-                                  onLoad={() => {
-                                    handlePreviewReady(previewRenderKey);
-                                  }}
-                                  onError={() => {
-                                    handlePreviewError(rowKey, previewSources.length);
-                                  }}
-                                />
-                              ) : null}
                             </div>
                           ) : (
                             <div className={`result-icon ${isDirectory ? "folder" : ""} kind-${iconKind}`} aria-hidden="true">
-                              {appIconSrc.length > 0 ? (
-                                <img className="result-icon-image" src={appIconSrc} alt="" loading="lazy" />
-                              ) : (
-                                <ResultTypeIcon kind={iconKind} className="result-icon-glyph" />
-                              )}
+                              <ResultTypeIcon kind={iconKind} className="result-icon-glyph" />
                             </div>
                           )}
 
@@ -5434,17 +4335,9 @@ function App() {
                             <span>{highlightMatch(result.path, displayQuery)}</span>
                           </div>
                           <div className="result-meta">
-                            <span className="meta-chip">{isAppResult ? "app" : extensionLabel}</span>
-                            {isAppResult ? (
-                              <span className="meta-chip">
-                                {result.revealPath ? "Desktop app" : "Installed app"}
-                              </span>
-                            ) : (
-                              <>
-                                <span className="meta-chip">{formatBytes(result.size)}</span>
-                                <span className="meta-chip">{formatUnix(result.createdUnix)}</span>
-                              </>
-                            )}
+                            <span className="meta-chip">{extensionLabel}</span>
+                            <span className="meta-chip">{formatBytes(result.size)}</span>
+                            <span className="meta-chip">{formatUnix(result.createdUnix)}</span>
                           </div>
                           <div className="result-actions">
                             <button
@@ -5452,23 +4345,21 @@ function App() {
                               className="row-action"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                void launchSearchResult(result);
+                                void openResult(result.path);
                               }}
                             >
                               Open
                             </button>
-                            {canRevealLocation ? (
-                              <button
-                                type="button"
-                                className="row-action"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void revealSearchResult(result);
-                                }}
-                              >
-                                Folder
-                              </button>
-                            ) : null}
+                            <button
+                              type="button"
+                              className="row-action"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void revealResult(result.path);
+                              }}
+                            >
+                              Folder
+                            </button>
                           </div>
                         </li>
                       );
@@ -5484,44 +4375,6 @@ function App() {
                 ) : null}
               </div>
 
-              {quickSplitResizeEnabled ? (
-                <div
-                  className={`quick-preview-splitter ${quickSplitDragging ? "is-dragging" : ""}`}
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="Resize quick results and preview panels"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(effectiveQuickResultsPaneRatio * 100)}
-                  tabIndex={0}
-                  title="Drag to resize results and preview. Double-click to reset."
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    setQuickSplitDragging(true);
-                  }}
-                  onDoubleClick={() => {
-                    setQuickResultsPaneRatio(QUICK_RESULTS_PANE_DEFAULT_RATIO);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "ArrowLeft") {
-                      event.preventDefault();
-                      adjustQuickResultsPaneRatio(-0.02);
-                    } else if (event.key === "ArrowRight") {
-                      event.preventDefault();
-                      adjustQuickResultsPaneRatio(0.02);
-                    } else if (event.key === "Home") {
-                      event.preventDefault();
-                      setQuickResultsPaneRatio(0.3);
-                    } else if (event.key === "End") {
-                      event.preventDefault();
-                      setQuickResultsPaneRatio(0.7);
-                    }
-                  }}
-                >
-                  <span className="quick-preview-splitter-grip" aria-hidden="true" />
-                </div>
-              ) : null}
-
               {isQuickMode ? (
                 <aside className="quick-preview-panel" aria-label="Selected file preview">
                   {selectedResult ? (
@@ -5534,14 +4387,7 @@ function App() {
                         <span className={`result-fallback-icon-shell kind-${selectedResultIconKind} quick-preview-fallback-icon-shell`} aria-hidden="true">
                           <ResultTypeIcon kind={selectedResultIconKind} className="result-fallback-icon" />
                         </span>
-                        {selectedResultAppIconSrc.length > 0 ? (
-                          <img
-                            className="preview-media ready app-result-icon-media"
-                            src={selectedResultAppIconSrc}
-                            alt=""
-                            loading="lazy"
-                          />
-                        ) : hasSelectedPreview && selectedPreviewKind === "image" ? (
+                        {hasSelectedPreview && selectedPreviewKind === "image" ? (
                           <img
                             key={`${selectedResultRowKey}:${selectedPreviewIndex}:image:quick`}
                             className={`preview-media ${selectedPreviewReady ? "ready" : ""}`}
@@ -5588,7 +4434,7 @@ function App() {
                             }}
                           />
                         ) : null}
-                        {!hasSelectedPreview && selectedResultAppIconSrc.length === 0 ? (
+                        {!hasSelectedPreview ? (
                           <div className="quick-preview-placeholder">
                             <strong>{showPreviews ? "Preview unavailable" : "Preview disabled"}</strong>
                             <span>
@@ -5611,57 +4457,40 @@ function App() {
                               type="button"
                               className="row-action"
                               onClick={() => {
-                                void launchSearchResult(selectedResult);
+                                void openResult(selectedResult.path);
                               }}
                             >
-                              {isAppSearchResult(selectedResult) ? "Open app" : "Open file"}
+                              Open file
                             </button>
-                            {canRevealResultLocation(selectedResult) ? (
-                              <button
-                                type="button"
-                                className="row-action"
-                                onClick={() => {
-                                  void revealSearchResult(selectedResult);
-                                }}
-                              >
-                                Reveal folder
-                              </button>
-                            ) : null}
+                            <button
+                              type="button"
+                              className="row-action"
+                              onClick={() => {
+                                void revealResult(selectedResult.path);
+                              }}
+                            >
+                              Reveal folder
+                            </button>
                           </div>
                         </div>
 
                         <div className="quick-preview-meta">
                           <div className="quick-preview-meta-card">
                             <span>Type</span>
-                            <strong>{isAppSearchResult(selectedResult) ? "app" : selectedResultExtensionLabel}</strong>
+                            <strong>{selectedResultExtensionLabel}</strong>
                           </div>
-                          {isAppSearchResult(selectedResult) ? (
-                            <>
-                              <div className="quick-preview-meta-card">
-                                <span>Kind</span>
-                                <strong>{selectedResult.revealPath ? "Desktop app" : "Installed app"}</strong>
-                              </div>
-                              <div className="quick-preview-meta-card quick-preview-meta-card-wide">
-                                <span>{selectedResultLocationLabel}</span>
-                                <strong>{selectedResultLocationText}</strong>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="quick-preview-meta-card">
-                                <span>Size</span>
-                                <strong>{formatBytes(selectedResult.size)}</strong>
-                              </div>
-                              <div className="quick-preview-meta-card">
-                                <span>Created</span>
-                                <strong>{formatUnix(selectedResult.createdUnix)}</strong>
-                              </div>
-                              <div className="quick-preview-meta-card">
-                                <span>Modified</span>
-                                <strong>{formatUnix(selectedResult.modifiedUnix)}</strong>
-                              </div>
-                            </>
-                          )}
+                          <div className="quick-preview-meta-card">
+                            <span>Size</span>
+                            <strong>{formatBytes(selectedResult.size)}</strong>
+                          </div>
+                          <div className="quick-preview-meta-card">
+                            <span>Created</span>
+                            <strong>{formatUnix(selectedResult.createdUnix)}</strong>
+                          </div>
+                          <div className="quick-preview-meta-card">
+                            <span>Modified</span>
+                            <strong>{formatUnix(selectedResult.modifiedUnix)}</strong>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -6314,76 +5143,10 @@ function App() {
                 <div className="advanced-settings-section">
                   <div className="advanced-section-header">
                     <div>
-                      <h3>Installed app search</h3>
-                      <p className="advanced-note">
-                        Search and launch installed apps alongside files in both the full workspace
-                        and Quick Window.
-                      </p>
-                    </div>
-                    <span className="theme-mode-status">
-                      {includeInstalledApps
-                        ? installedAppsLoading
-                          ? "Loading apps..."
-                          : `${installedApps.length.toLocaleString()} apps ready`
-                        : "App search off"}
-                    </span>
-                  </div>
-
-                  <button
-                    type="button"
-                    className={`settings-switch-card settings-switch-card-button ${
-                      includeInstalledApps ? "is-active" : ""
-                    }`}
-                    role="switch"
-                    aria-checked={includeInstalledApps}
-                    onClick={() => {
-                      setIncludeInstalledApps((previous) => !previous);
-                    }}
-                  >
-                    <div className="settings-switch-copy">
-                      <strong>Include installed apps in search results</strong>
-                      <span>
-                        Shows launchable apps with their real icons.
-                      </span>
-                    </div>
-                    <span
-                      className={`scan-switch settings-switch-toggle settings-switch-toggle-button ${
-                        includeInstalledApps ? "is-on" : ""
-                      }`}
-                      aria-hidden="true"
-                    >
-                      <span className="scan-switch-slider" aria-hidden="true" />
-                      <span>{includeInstalledApps ? "On" : "Off"}</span>
-                    </span>
-                  </button>
-
-                  <div className="advanced-settings-actions">
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      disabled={!includeInstalledApps || installedAppsLoading}
-                      onClick={() => {
-                        setAppIconFailures({});
-                        setInstalledAppsRefreshKey((current) => current + 1);
-                      }}
-                    >
-                      {installedAppsLoading ? "Refreshing apps..." : "Refresh installed apps"}
-                    </button>
-                  </div>
-                  <p className="advanced-note">
-                    Apps do not use the file index. OmniSearch reads the Windows app catalog and
-                    merges app matches into the same Search view.
-                  </p>
-                  {installedAppsError ? <p className="advanced-error">{installedAppsError}</p> : null}
-                </div>
-
-                <div className="advanced-settings-section">
-                  <div className="advanced-section-header">
-                    <div>
                       <h3>Search history</h3>
                       <p className="advanced-note">
-                        Show recent searches and opened results in the full workspace when the
-                        search box is empty.
+                        Show recent searches and opened files in the full workspace when the search
+                        box is empty.
                       </p>
                     </div>
                     <span className="theme-mode-status">
@@ -6405,8 +5168,8 @@ function App() {
                     <div className="settings-switch-copy">
                       <strong>Show recent searches in the empty search area</strong>
                       <span>
-                        Keeps up to {RECENT_ACTIVITY_LIMIT} recent searches and opened files or
-                        apps ready to reopen from the Search tab.
+                        Keeps up to {RECENT_ACTIVITY_LIMIT} recent searches and opened files ready
+                        to reopen from the Search tab.
                       </span>
                     </div>
                     <span
@@ -6741,16 +5504,12 @@ function App() {
                 role="menuitem"
               onClick={() => {
                   closeSearchResultContextMenu();
-                  void launchSearchResult(activeSearchResultMenu);
+                  void openResult(activeSearchResultMenu.path);
                 }}
               >
-                {activeSearchResultMenu.isDirectory
-                  ? "Open folder"
-                  : activeSearchResultIsApp
-                    ? "Open app"
-                    : "Open file"}
+                {activeSearchResultMenu.isDirectory ? "Open folder" : "Open file"}
               </button>
-              {!activeSearchResultMenu.isDirectory && activeSearchResultCanReveal ? (
+              {!activeSearchResultMenu.isDirectory ? (
                 <button
                   type="button"
                   className="result-context-menu-item"
@@ -6760,39 +5519,35 @@ function App() {
                     void openResultPath(activeSearchResultMenu);
                   }}
                 >
-                  {activeSearchResultIsApp ? "Open app location" : "Open containing folder"}
+                  Open containing folder
                 </button>
               ) : null}
-              {!activeSearchResultIsApp ? (
-                <>
-                  <button
-                    type="button"
-                    className="result-context-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      closeSearchResultContextMenu();
-                      void openResultInConsole(activeSearchResultMenu);
-                    }}
-                  >
-                    <span className="result-context-menu-item-icon" aria-hidden="true">
-                      <ConsoleIcon />
-                    </span>
-                    <span className="result-context-menu-item-label">Open path in console</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="result-context-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      openSearchResultRename(activeSearchResultMenu, searchResultContextMenu.rowKey);
-                    }}
-                  >
-                    Rename
-                  </button>
+              <button
+                type="button"
+                className="result-context-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  closeSearchResultContextMenu();
+                  void openResultInConsole(activeSearchResultMenu);
+                }}
+              >
+                <span className="result-context-menu-item-icon" aria-hidden="true">
+                  <ConsoleIcon />
+                </span>
+                <span className="result-context-menu-item-label">Open path in console</span>
+              </button>
+              <button
+                type="button"
+                className="result-context-menu-item"
+                role="menuitem"
+              onClick={() => {
+                openSearchResultRename(activeSearchResultMenu, searchResultContextMenu.rowKey);
+              }}
+            >
+              Rename
+            </button>
 
-                  <div className="result-context-menu-divider" />
-                </>
-              ) : null}
+            <div className="result-context-menu-divider" />
 
             <button
               type="button"
@@ -6800,13 +5555,10 @@ function App() {
               role="menuitem"
               onClick={() => {
                 closeSearchResultContextMenu();
-                void handleSearchResultCopy(
-                  activeSearchResultLocationText,
-                  activeSearchResultLocationLabel.toLowerCase(),
-                );
+                void handleSearchResultCopy(activeSearchResultMenu.path, "path");
               }}
             >
-              {`Copy ${activeSearchResultLocationLabel.toLowerCase()}`}
+              Copy path
             </button>
             {activeSearchResultMenu.isDirectory ? (
               <button
@@ -6817,10 +5569,10 @@ function App() {
                   closeSearchResultContextMenu();
                   void handleSearchResultCopy(resultDisplayName(activeSearchResultMenu), "folder name");
                 }}
-                >
-                  Copy folder name
-                </button>
-            ) : !activeSearchResultIsApp ? (
+              >
+                Copy folder name
+              </button>
+            ) : (
               <>
                 <button
                   type="button"
@@ -6848,242 +5600,20 @@ function App() {
                   Copy filename + extension
                 </button>
               </>
-            ) : null}
+            )}
 
-            {!activeSearchResultIsApp ? (
-              <>
-                <div className="result-context-menu-divider" />
+            <div className="result-context-menu-divider" />
 
-                <button
-                  type="button"
-                  className="result-context-menu-item danger"
-                  role="menuitem"
-                  onClick={() => {
-                    openSearchResultDelete(activeSearchResultMenu, searchResultContextMenu.rowKey);
-                  }}
-                >
-                  Delete
-                </button>
-              </>
-            ) : null}
-          </div>
-        ) : null}
-
-        {quickLookOpen && selectedResult ? (
-          <div
-            className="quick-look-overlay"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Quick Look: ${selectedResult.name}`}
-            onClick={(event) => {
-              if (event.target === event.currentTarget) {
-                closeQuickLook();
-              }
-            }}
-          >
-            <div
-              ref={quickLookDialogRef}
-              className="quick-look-dialog"
-              tabIndex={-1}
-              onClick={(event) => {
-                event.stopPropagation();
+            <button
+              type="button"
+              className="result-context-menu-item danger"
+              role="menuitem"
+              onClick={() => {
+                openSearchResultDelete(activeSearchResultMenu, searchResultContextMenu.rowKey);
               }}
             >
-              <div className="quick-look-header">
-                <div className="quick-look-copy">
-                  <div className="quick-look-title-row">
-                    <strong>{selectedResult.name}</strong>
-                    <span className="quick-look-position-pill">
-                      {`${selectedResultPosition} of ${visibleResults.length.toLocaleString()}`}
-                    </span>
-                  </div>
-                  <p className="quick-look-hint">Esc to close, Arrow keys to switch results, Enter to open.</p>
-                </div>
-                <div className="quick-look-actions">
-                  <button
-                    type="button"
-                    className="row-action"
-                    onClick={() => {
-                      closeQuickLook({ restoreFocus: false });
-                      void launchSearchResult(selectedResult);
-                    }}
-                  >
-                    {selectedResultIsDirectory
-                      ? "Open folder"
-                      : isAppSearchResult(selectedResult)
-                        ? "Open app"
-                        : "Open file"}
-                  </button>
-                  {canRevealResultLocation(selectedResult) ? (
-                    <button
-                      type="button"
-                      className="row-action"
-                      onClick={() => {
-                        closeQuickLook({ restoreFocus: false });
-                        void revealSearchResult(selectedResult);
-                      }}
-                    >
-                      Reveal folder
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="ghost-button quick-look-close-button"
-                    onClick={() => {
-                      closeQuickLook();
-                    }}
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-
-              <div className="quick-look-layout">
-                <div
-                  className={`quick-look-stage ${selectedResultIsDirectory ? "folder" : ""} kind-${selectedResultIconKind}`}
-                >
-                  <span
-                    className={`result-fallback-icon-shell kind-${selectedResultIconKind} quick-look-fallback-icon-shell`}
-                    aria-hidden="true"
-                  >
-                    <ResultTypeIcon kind={selectedResultIconKind} className="result-fallback-icon" />
-                  </span>
-                  {selectedResultAppIconSrc.length > 0 ? (
-                    <img
-                      className="preview-media ready app-result-icon-media"
-                      src={selectedResultAppIconSrc}
-                      alt=""
-                      loading="lazy"
-                    />
-                  ) : hasQuickLookPreview && quickLookPreviewKind === "image" ? (
-                    <img
-                      key={`${selectedResultRowKey}:${quickLookPreviewIndex}:image:quick-look`}
-                      className={`preview-media ${quickLookPreviewReady ? "ready" : ""}`}
-                      src={quickLookPreviewSrc}
-                      alt=""
-                      loading="lazy"
-                      onLoad={() => {
-                        handleSelectedPreviewReady(quickLookPreviewRenderKey);
-                      }}
-                      onError={() => {
-                        handleSelectedPreviewError(quickLookPreviewSources.length);
-                      }}
-                    />
-                  ) : null}
-                  {hasQuickLookPreview && quickLookPreviewKind === "video" ? (
-                    <video
-                      key={`${selectedResultRowKey}:${quickLookPreviewIndex}:video:quick-look`}
-                      className={`preview-media ${quickLookPreviewReady ? "ready" : ""}`}
-                      src={quickLookPreviewSrc}
-                      controls
-                      muted
-                      playsInline
-                      preload="metadata"
-                      onLoadedData={() => {
-                        handleSelectedPreviewReady(quickLookPreviewRenderKey);
-                      }}
-                      onError={() => {
-                        handleSelectedPreviewError(quickLookPreviewSources.length);
-                      }}
-                    />
-                  ) : null}
-                  {hasQuickLookPreview && quickLookPreviewKind === "pdf" ? (
-                    <iframe
-                      key={`${selectedResultRowKey}:${quickLookPreviewIndex}:pdf:quick-look`}
-                      className={`preview-media ${quickLookPreviewReady ? "ready" : ""}`}
-                      src={`${quickLookPreviewSrc}#toolbar=0&navpanes=0&scrollbar=0&page=1&view=FitH`}
-                      title={selectedResult.name}
-                      loading="lazy"
-                      onLoad={() => {
-                        handleSelectedPreviewReady(quickLookPreviewRenderKey);
-                      }}
-                      onError={() => {
-                        handleSelectedPreviewError(quickLookPreviewSources.length);
-                      }}
-                    />
-                  ) : null}
-                  {!hasQuickLookPreview && selectedResultAppIconSrc.length === 0 ? (
-                    <div className="quick-look-placeholder">
-                      <strong>
-                        {quickLookPreviewKind === "none"
-                          ? "Large preview isn't available for this result yet"
-                          : "Preview couldn't be loaded"}
-                      </strong>
-                      <span>
-                        {quickLookPreviewKind === "none"
-                          ? "Quick Look still gives you a bigger read on the file details so you can decide whether to open it."
-                          : "Try opening the file directly, or move through the results with the Arrow keys to inspect another match."}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-
-                <aside className="quick-look-sidebar">
-                  <div className="quick-look-meta-grid">
-                    <div className="quick-look-meta-card">
-                      <span>Type</span>
-                      <strong>{isAppSearchResult(selectedResult) ? "app" : selectedResultExtensionLabel}</strong>
-                    </div>
-                    {isAppSearchResult(selectedResult) ? (
-                      <div className="quick-look-meta-card">
-                        <span>Kind</span>
-                        <strong>{selectedResult.revealPath ? "Desktop app" : "Installed app"}</strong>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="quick-look-meta-card">
-                          <span>Size</span>
-                          <strong>{formatBytes(selectedResult.size)}</strong>
-                        </div>
-                        <div className="quick-look-meta-card">
-                          <span>Created</span>
-                          <strong>{formatUnix(selectedResult.createdUnix)}</strong>
-                        </div>
-                        <div className="quick-look-meta-card">
-                          <span>Modified</span>
-                          <strong>{formatUnix(selectedResult.modifiedUnix)}</strong>
-                        </div>
-                      </>
-                    )}
-                    <div className="quick-look-meta-card quick-look-meta-card-wide">
-                      <div className="quick-look-meta-card-header">
-                        <span>{selectedResultLocationLabel}</span>
-                        <button
-                          type="button"
-                          className={`quick-look-copy-button ${
-                            quickLookCopyState === "copied"
-                              ? "is-copied"
-                              : quickLookCopyState === "error"
-                                ? "is-error"
-                                : ""
-                          }`}
-                          aria-label={
-                            quickLookCopyState === "copied"
-                              ? "Path copied"
-                              : quickLookCopyState === "error"
-                                ? "Copy failed"
-                                : "Copy path"
-                          }
-                          title={
-                            quickLookCopyState === "copied"
-                              ? "Path copied"
-                              : quickLookCopyState === "error"
-                                ? "Copy failed"
-                                : "Copy path"
-                          }
-                          onClick={() => {
-                            void handleQuickLookPathCopy(selectedResultLocationText);
-                          }}
-                        >
-                          {quickLookCopyState === "copied" ? <CheckIcon /> : <CopyIcon />}
-                        </button>
-                      </div>
-                      <strong>{selectedResultLocationText}</strong>
-                    </div>
-                  </div>
-                </aside>
-              </div>
-            </div>
+              Delete
+            </button>
           </div>
         ) : null}
 

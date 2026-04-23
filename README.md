@@ -37,11 +37,13 @@ OmniSearch reads NTFS metadata directly through USN/MFT APIs for quick global se
   <img src="src-tauri/icons/icon.png" width="150" alt="OmniSearch Logo">
 </p>
 
-<p align="center">&nbsp;</p>
+<p align="center">
+  Search faster across your Windows drives with advanced filters, duplicate cleanup, Quick Window access, and a growing Microsoft Store version.
+</p>
 
 <p align="center"><strong>Search Experience</strong></p>
 <p align="center">
-  <img src="docs/images/a.gif" width="84%" alt="OmniSearch Screenshot">
+  <img src="docs/images/main_view.png" width="84%" alt="OmniSearch Screenshot">
 </p>
 <p align="center"><em>Main search tab with filters, categories, previews, and actions.</em></p>
 <p align="center"><sub>──────────── · ────────────</sub></p>
@@ -57,7 +59,7 @@ OmniSearch reads NTFS metadata directly through USN/MFT APIs for quick global se
 
 <p align="center"><strong>Advanced Features</strong></p>
 <p align="center">
-  <img src="docs/images/dub.png" width="44%" alt="OmniSearch Duplicate Finder Screenshot">
+  <img src="docs/images/A2.png" width="44%" alt="OmniSearch Duplicate Finder Screenshot">
   <img src="docs/images/6.png" width="44%" alt="OmniSearch Drive Scope and Advanced Settings Screenshot">
 </p>
 <p align="center">
@@ -101,7 +103,7 @@ OmniSearch reads NTFS metadata directly through USN/MFT APIs for quick global se
 - Native Windows indexing engine in C++ using `DeviceIoControl` + USN/MFT enumeration.
 - Live incremental index updates via USN journal watcher after initial scan.
 - Rust FFI bridge exposing Tauri commands for indexing, searching, duplicates, drive listing, and file actions.
-- Fast search UI with advanced filters: extension, file size range, created date range, clear buttons, and a compact layout toggle.
+- Fast search UI with advanced filters: extension, file size range, created date range.
 - Inline search syntax with `ext:` plus text content operators like `content:`, `ansicontent:`, `utf8content:`, `utf16content:`, and `utf16becontent:`.
 - Hybrid search flow that keeps normal path/name lookups fast and only scans file contents from disk when you explicitly use content syntax.
 - Duplicate finder with multithreaded hashing and grouped results (plus reclaimable size).
@@ -110,11 +112,9 @@ OmniSearch reads NTFS metadata directly through USN/MFT APIs for quick global se
 - Optional search scope toggle to scan all NTFS drives instead of only the selected drive.
 - Optional `Include folders` indexing mode so folder paths can appear in search results.
 - Advanced settings panel for configurable default search limit (persisted locally).
-- Optional installed app search with real app icons, direct app launching, and integration into Recent activity.
-- Recent activity remembers both searches and opened items, with pinning support to keep important entries at the top.
 - Incremental `Load more` results flow that expands by your configured default limit step.
-- Result tools: open file, reveal in folder, previews (image/video/pdf), Quick Look with the Space key, sort modes, and category tabs.
-- Quick Window mode for compact search, fast hotkey access, a draggable results/preview splitter, and a dedicated selected-result preview surface.
+- Result tools: open file, reveal in folder, previews (image/video/pdf), sort modes, and category tabs.
+- Quick Window mode for compact search, fast hotkey access, and a dedicated selected-result preview surface.
 - Search result context actions: open path, copy path, copy filename, copy full filename, rename, and delete.
 - Optional Recycle Bin delete flow for both duplicate cleanup and standard search results.
 - Native drag-out support so files can be dragged directly from result rows into Explorer or other apps.
@@ -183,7 +183,6 @@ omni-search/
 - `sync_window_theme_command`
 - `open_external_url`
 - `load_preview_data_url`
-- `list_installed_apps`, `launch_installed_app`, `reveal_installed_app`
 
 ## Requirements
 
@@ -271,5 +270,4 @@ Update visible app metadata in `src-tauri/tauri.conf.json`:
    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Eul45/omni-search&type=date&legend=top-left" />
  </picture>
 </a>
-
 

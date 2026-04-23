@@ -31,6 +31,7 @@ struct RawUsnEntry {
   uint64_t parent_frn;
   std::wstring name;
   bool is_directory;
+  bool is_hidden;
   uint32_t reason;
 };
 
@@ -38,6 +39,7 @@ struct NodeEntry {
   uint64_t parent_frn;
   std::wstring name;
   bool is_directory;
+  bool is_hidden;
 };
 
 struct IndexedFile {
@@ -45,6 +47,7 @@ struct IndexedFile {
   uint64_t parent_frn;
   std::wstring path;
   bool is_directory;
+  bool is_hidden;
 };
 
 struct ScanSnapshot {
@@ -123,6 +126,7 @@ std::atomic<bool> g_is_indexing{false};
 std::atomic<bool> g_is_ready{false};
 std::atomic<uint64_t> g_indexed_count{0};
 std::atomic<bool> g_include_directories{false};
+std::atomic<bool> g_include_hidden{false};
 std::atomic<bool> g_scan_all_drives_mode{false};
 std::atomic<uint64_t> g_indexing_request_token{0};
 std::atomic<uint64_t> g_live_watcher_token{0};
@@ -448,11 +452,14 @@ bool ContainsCaseInsensitive(const std::wstring& text, const std::wstring& needl
 
   const size_t last_start = text.size() - needle_lower.size();
   for (size_t i = 0; i <= last_start; ++i) {
-    if (CompareStringOrdinal(text.c_str() + i,
-                             static_cast<int>(needle_lower.size()),
-                             needle_lower.c_str(),
-                             static_cast<int>(needle_lower.size()),
-                             TRUE) == CSTR_EQUAL) {
+    bool matched = true;
+    for (size_t j = 0; j < needle_lower.size(); ++j) {
+      if (static_cast<wchar_t>(std::towlower(text[i + j])) != needle_lower[j]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) {
       return true;
     }
   }
@@ -1295,6 +1302,7 @@ bool ParseUsnRecord(const BYTE* record_ptr, DWORD record_length, RawUsnEntry* ou
     out->frn = v2->FileReferenceNumber;
     out->parent_frn = v2->ParentFileReferenceNumber;
     out->is_directory = (v2->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    out->is_hidden = (v2->FileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
     out->reason = v2->Reason;
     out->name.assign(name_ptr, v2->FileNameLength / sizeof(wchar_t));
     return true;
@@ -1316,6 +1324,7 @@ bool ParseUsnRecord(const BYTE* record_ptr, DWORD record_length, RawUsnEntry* ou
     out->frn = FileId128ToU64(v3->FileReferenceNumber);
     out->parent_frn = FileId128ToU64(v3->ParentFileReferenceNumber);
     out->is_directory = (v3->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    out->is_hidden = (v3->FileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
     out->reason = v3->Reason;
     out->name.assign(name_ptr, v3->FileNameLength / sizeof(wchar_t));
     return true;
@@ -1543,12 +1552,13 @@ void RebuildIndexedFilesFromNodesLocked() {
   std::unordered_set<uint64_t> resolving;
   const bool include_directories =
       g_include_directories.load(std::memory_order_acquire);
+  const bool include_hidden =
+      g_include_hidden.load(std::memory_order_acquire);
 
   for (const IndexedFile& file : previous_files) {
     if (file.is_directory && !include_directories) {
       continue;
     }
-
     std::wstring full_path;
     bool resolved = false;
     if (file.is_directory) {
@@ -1582,6 +1592,7 @@ void RebuildIndexedFilesFromNodesLocked() {
         file.parent_frn,
         std::move(full_path),
         file.is_directory,
+        file.is_hidden,
     });
   }
 }
@@ -1641,7 +1652,7 @@ void ApplyUsnBatchLocked(const std::vector<RawUsnEntry>& entries) {
     }
 
     if (entry.is_directory) {
-      g_nodes[entry.frn] = NodeEntry{entry.parent_frn, entry.name, entry.is_directory};
+      g_nodes[entry.frn] = NodeEntry{entry.parent_frn, entry.name, entry.is_directory, entry.is_hidden};
 
       resolving.clear();
       std::wstring full_path;
@@ -2227,6 +2238,7 @@ duplicate_finish:
 
 bool scan_fallback_internal(const std::wstring& drive_letter, ScanSnapshot* out_snapshot,
                             const bool include_directories,
+                            const bool include_hidden,
                             const uint64_t request_token, bool* out_cancelled,
                             std::string* out_error) {
   *out_cancelled = false;
@@ -2315,11 +2327,15 @@ bool scan_fallback_internal(const std::wstring& drive_letter, ScanSnapshot* out_
         }
       }
 
+      const bool starts_hidden =
+          (entry.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
+
       files.push_back(IndexedFile{
           synthetic_frn++,
           0,
           std::move(full_path),
           is_directory,
+          starts_hidden,
       });
 
       if ((files.size() & 0x0FFF) == 0) {
@@ -2342,7 +2358,9 @@ bool scan_fallback_internal(const std::wstring& drive_letter, ScanSnapshot* out_
 }
 
 bool scan_mft_internal(const std::wstring& drive_letter, ScanSnapshot* out_snapshot,
-                       const bool include_directories, const uint64_t request_token,
+                       const bool include_directories,
+                       const bool include_hidden,
+                       const uint64_t request_token,
                        bool* out_cancelled, std::string* out_error) {
   *out_cancelled = false;
   out_snapshot->files.clear();
@@ -2450,7 +2468,7 @@ bool scan_mft_internal(const std::wstring& drive_letter, ScanSnapshot* out_snaps
       RawUsnEntry entry{};
       if (ParseUsnRecord(record_ptr, record_length, &entry) && !entry.name.empty()) {
         nodes[entry.frn] =
-            NodeEntry{entry.parent_frn, std::move(entry.name), entry.is_directory};
+            NodeEntry{entry.parent_frn, std::move(entry.name), entry.is_directory, entry.is_hidden};
         if (!entry.is_directory) {
           ++discovered_files;
           if ((discovered_files & 0x3FFF) == 0) {
@@ -2468,7 +2486,7 @@ bool scan_mft_internal(const std::wstring& drive_letter, ScanSnapshot* out_snaps
     *out_cancelled = true;
     return false;
   }
-  nodes[root_frn] = NodeEntry{root_frn, L"", true};
+  nodes[root_frn] = NodeEntry{root_frn, L"", true, false};
 
   std::unordered_map<uint64_t, std::wstring> path_cache;
   path_cache.reserve(nodes.size() / 2 + 1);
@@ -2499,6 +2517,7 @@ bool scan_mft_internal(const std::wstring& drive_letter, ScanSnapshot* out_snaps
         node.parent_frn,
         std::move(full_path),
         node.is_directory,
+        node.is_hidden,
     });
   }
 
@@ -2688,7 +2707,7 @@ std::vector<std::wstring> ResolveTargetDrivesForIndexing(
 
 extern "C" __declspec(dllexport) bool omni_start_indexing(
     const char* drive_utf8, const bool include_directories,
-    const bool scan_all_drives) {
+    const bool scan_all_drives, const bool include_hidden) {
   const uint64_t request_token =
       g_indexing_request_token.fetch_add(1, std::memory_order_acq_rel) + 1;
 
@@ -2699,10 +2718,11 @@ extern "C" __declspec(dllexport) bool omni_start_indexing(
   StopLiveWatcher();
   const std::wstring drive_letter = NormalizeDriveLetter(drive_utf8);
   g_include_directories.store(include_directories, std::memory_order_release);
+  g_include_hidden.store(include_hidden, std::memory_order_release);
   g_scan_all_drives_mode.store(scan_all_drives, std::memory_order_release);
 
   std::thread(
-      [drive_letter, include_directories, scan_all_drives, request_token]() {
+      [drive_letter, include_directories, scan_all_drives, include_hidden, request_token]() {
         if (scan_all_drives) {
           const std::vector<std::wstring> target_drives =
               ResolveTargetDrivesForIndexing(drive_letter, true);
@@ -2722,10 +2742,10 @@ extern "C" __declspec(dllexport) bool omni_start_indexing(
             const bool can_use_accelerated = CanOpenVolume(target_drive);
             const bool ok = can_use_accelerated
                                 ? scan_mft_internal(target_drive, &snapshot,
-                                                    include_directories, request_token,
+                                                    include_directories, include_hidden, request_token,
                                                     &cancelled, &error)
                                 : scan_fallback_internal(target_drive, &snapshot,
-                                                         include_directories, request_token,
+                                                         include_directories, include_hidden, request_token,
                                                          &cancelled, &error);
             if (cancelled || IsIndexingCancelled(request_token)) {
               return;
@@ -2783,10 +2803,10 @@ extern "C" __declspec(dllexport) bool omni_start_indexing(
         const bool can_use_accelerated = CanOpenVolume(drive_letter);
         const bool ok = can_use_accelerated
                             ? scan_mft_internal(drive_letter, &snapshot,
-                                                include_directories, request_token,
+                                                include_directories, include_hidden, request_token,
                                                 &cancelled, &error)
                             : scan_fallback_internal(drive_letter, &snapshot,
-                                                     include_directories, request_token,
+                                                     include_directories, include_hidden, request_token,
                                                      &cancelled, &error);
         if (cancelled || IsIndexingCancelled(request_token)) {
           return;
@@ -2858,6 +2878,7 @@ extern "C" __declspec(dllexport) char* omni_search_files_json(
   const ParsedSearchQuery parsed_query =
       ParseSearchQuery(Utf8ToWide(query_utf8 == nullptr ? "" : query_utf8));
   const std::wstring& query = parsed_query.path_query_lower;
+  const bool include_hidden = g_include_hidden.load(std::memory_order_acquire);
   const std::wstring extension_filter = NormalizeExtensionFilter(extension_utf8);
   const bool has_extension_filter = !extension_filter.empty();
   const bool extension_targets_directories =
@@ -2890,6 +2911,9 @@ extern "C" __declspec(dllexport) char* omni_search_files_json(
     for (const IndexedFile& file : g_indexed_files) {
       if (IsSearchCancelled(request_token)) {
         return HeapCopyString("[]");
+      }
+      if (file.is_hidden && !include_hidden) {
+        continue;
       }
       if (!ContainsCaseInsensitive(file.path, query)) {
         continue;
@@ -3149,7 +3173,7 @@ extern "C" __declspec(dllexport) char* scan_mft(const char* drive_utf8) {
   std::string error;
   bool cancelled = false;
   const bool ok = scan_mft_internal(
-      NormalizeDriveLetter(drive_utf8), &snapshot, false, 0, &cancelled, &error);
+      NormalizeDriveLetter(drive_utf8), &snapshot, false, false, 0, &cancelled, &error);
   if (!ok) {
     SetLastErrorText(error.empty() ? "scan_mft failed." : error);
     return nullptr;
